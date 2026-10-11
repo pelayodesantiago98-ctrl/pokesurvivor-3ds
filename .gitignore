@@ -1,0 +1,16 @@
+# Salidas regenerables (tools/build.ps1, tools/gen_*.py, capturas y trazas)
+build/
+dist/
+*.3dsx
+*.cia
+*.t3x
+*.smdh
+smoke-trace.txt
+shot*.png
+
+# Sistema / editores
+Thumbs.db
+desktop.ini
+.vscode/
+__pycache__/
+*.pyc

@@ -1,0 +1,14 @@
+## Configuración para el bundler web oficial (https://bundle.lovebrew.org).
+## El script local tools/build.ps1 lee también estos valores.
+
+[metadata]
+title = "PokeSurvivor"
+author = "lepay"
+description = "Survivor fan-made para 3DS"
+version = "0.1.0"
+icons = { ctr = "assets/icon.png", hac = "", cafe = "" }
+
+[build]
+targets = ["ctr"]
+source = "game"
+packaged = true
