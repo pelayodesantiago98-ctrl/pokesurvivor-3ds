@@ -1,4 +1,43 @@
-# Estado del port (actualizado 2026-10-11 por la noche)
+# Estado del port (actualizado 2026-10-12, madrugada)
+
+**Repositorio:** privado en GitHub, `pelayodesantiago98-ctrl/pokesurvivor-3ds`. En este
+PC no hay `gh` con sesión: se sube a través del VPS (remoto `vps` =
+`(servidor) que tiene `gh` y su `origin` en
+GitHub). Flujo: `git push vps main` y luego en el VPS `cd /root/proyectos/pokesurvivor-3ds
+&& git push origin main`. git portable: `C:\Users\lepay\3ds-tools\git\cmd\git.exe`.
+`build/` y `dist/` no se suben (regenerables).
+
+**NOVEDAD 4 (sesión del 2026-10-11/12, todo probado en PC con capturas, smoke y soak):**
+- Mapa: gráficos del tileset HGSS de SirMaio (`tools/gen_hgss.py`): suelo, hierba (con
+  animación al pisarla), flores, árboles, rocas y arbolito de Corte. Colocación estilo
+  Vampire Survivors (`pieceAt` en world.lua): piezas al azar con distancia mínima, sin
+  filas/columnas; rendijas < 72 entre árboles se rellenan; nada pisa los interactivos.
+  Hierba y flores en montones variados.
+- Colisión de árboles con caja de tronco + hojas (la sombra se pisa); `--treetest`.
+- Agua = agua poco profunda de Negro/Blanco con reflejos y bordes redondeados; lava =
+  mar de DPPt teñido y animado (4 fotogramas), sólida. Fuego cruza lava y no agua; el
+  resto al revés; Volador cruza ambas (`W.liquidSolidFor`); `--liqtest`, `--inwater`.
+- HUD de combate estilo Platino (etiqueta HP verde fija, barra que cambia de color);
+  botones de movimiento con fuente pixelada a tamaño 1.5 fijo (parte en 2 líneas o con
+  guion silábico); `--moves=id,id`.
+- Menús táctiles estilo DS (botón genérico `UI.button` con contorno, brillo y cursor de
+  esquinas rojo; fondo de rayas); menú principal estilo HGSS/BW con iconos de objeto
+  (`tools/gen_menu_icons.py`, Pokédex dibujada) y la ficha del compañero arriba.
+- Tarjeta de entrenador: 36 fondos propios + 15 al estilo de las tarjetas de 3.ª/4.ª/5.ª
+  gen (`tools/gen_card_art.py`), 311 entrenadores oficiales (Showdown, lista en
+  `tools/trainers.txt`), paneles con sprites de Negro/Blanco (1-649), 8 Poké Balls de
+  colores como medallas (una cada 16 de las 127, `tools/gen_badges.py`); sólo salen los
+  Pokémon que tienes. `--card=fondo,entrenador`, `--medals=N` (no se guardan).
+- NO se usa nada de Pokécharms (sus normas lo prohíben); se retiró.
+
+**Pendiente para la siguiente sesión:**
+- Reconstruir el CIA (`tools\build.ps1 -Target cia`), subirlo por FTP (192.168.1.34:5000,
+  /CIAS/) y probar en la consola: rendimiento de la lava animada, memoria de la tarjeta.
+- Las demás pantallas (gacha, misiones, mejoras, fases) conservan su distribución
+  antigua con los botones nuevos: pasarlas al estilo DS si el usuario lo pide.
+- El número de la tarjeta sale "ID 59067" (la fuente pixelada no tiene "º").
+
+# Estado anterior (2026-10-11 por la noche)
 
 **NOVEDAD 3 (mecánicas de giovanneluna/poke-survivors, MIT, copia del código en
 `C:\Users\lepay\3ds-tools\src\poke-survivors`):**
