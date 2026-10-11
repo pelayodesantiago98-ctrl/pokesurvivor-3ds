@@ -3,8 +3,9 @@
 **Repositorio:** privado en GitHub, `pelayodesantiago98-ctrl/pokesurvivor-3ds`. En este
 PC no hay `gh` con sesión: se sube a través del VPS (remoto `vps` =
 `(servidor) que tiene `gh` y su `origin` en
-GitHub). Flujo: `git push vps main` y luego en el VPS `cd /root/proyectos/pokesurvivor-3ds
-&& git push origin main`. git portable: `C:\Users\lepay\3ds-tools\git\cmd\git.exe`.
+GitHub). Flujo: basta `git push vps main`; un hook `post-receive` del VPS lo reenvía a
+GitHub (y `receive.denyCurrentBranch=updateInstead` actualiza su copia). git portable:
+`C:\Users\lepay\3ds-tools\git\cmd\git.exe` (el repo ya tiene `core.sshCommand` con la clave del VPS).
 `build/` y `dist/` no se suben (regenerables).
 
 **NOVEDAD 4 (sesión del 2026-10-11/12, todo probado en PC con capturas, smoke y soak):**
