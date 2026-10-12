@@ -308,6 +308,21 @@ local function turret(pl, m)
 end
 
 -- Distancia² del punto (cx, cy) al segmento (ax, ay)-(bx, by).
+-- Apunta un golpe de un orbe (clave = id del enemigo, o -id del objeto).
+-- Las órbitas duran toda la partida: pasado de 300 apuntes se olvidan los
+-- golpes viejos (antes la tabla crecía sin fin en las partidas largas).
+local function logHit(p, k, now)
+    if p.hitLog[k] == nil then p.hitLogN = (p.hitLogN or 0) + 1 end
+    p.hitLog[k] = now
+    if p.hitLogN > 300 then
+        local log, n = p.hitLog, 0
+        for key, t in pairs(log) do
+            if now - t > p.rehit then log[key] = nil else n = n + 1 end
+        end
+        p.hitLogN = n
+    end
+end
+
 local function segDist2(ax, ay, bx, by, cx, cy)
     local dx, dy = bx - ax, by - ay
     local l2 = dx * dx + dy * dy
@@ -641,7 +656,7 @@ function C.resolve(dt, pl, now)
                         local k = -prop.id
                         local last = p.hitLog[k] or -99
                         if now - last >= p.rehit then
-                            p.hitLog[k] = now
+                            logHit(p, k, now)
                             W.damageProp(prop, p.dmg, p.color)
                         end
                     elseif not p.phits[prop.id] then
@@ -671,7 +686,7 @@ function C.resolve(dt, pl, now)
                         local skip = false
                         if p.orb then
                             local last = p.hitLog[e.id] or -99
-                            if now - last < p.rehit then skip = true else p.hitLog[e.id] = now end
+                            if now - last < p.rehit then skip = true else logHit(p, e.id, now) end
                         else
                             if p.hits[e.id] then skip = true else p.hits[e.id] = true end
                         end

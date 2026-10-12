@@ -207,17 +207,18 @@ local RAW = {
       cd = 0.95, dmg = 21, count = 4, radius = 140 },
 
     -- ---------------- PSÍQUICO ----------------
+    -- (11-10-2026: -22/-30 % de daño y persiguen menos; llenaban el ranking.)
     { id = 'confusion', name = 'Confusión', type = 'psychic', kind = 'projectile',
       desc = 'Onda que persigue sola a su objetivo.',
-      cd = 0.58, dmg = 19, speed = 280, count = 1, spread = 0.1, pierce = 0, life = 2.2, size = 8, homing = 3.2 },
+      cd = 0.58, dmg = 13, speed = 280, count = 1, spread = 0.1, pierce = 0, life = 2.2, size = 8, homing = 2.0 },
 
     { id = 'psybeam', name = 'Psicorrayo', type = 'psychic', kind = 'beam',
       desc = 'Rayo psíquico ancho y contundente.',
-      cd = 1.15, dmg = 22, radius = 215, width = 40 },
+      cd = 1.15, dmg = 17, radius = 215, width = 40 },
 
     { id = 'psychic', name = 'Psíquico', type = 'psychic', kind = 'nova',
       desc = 'Estallido mental radial que busca enemigos.',
-      cd = 1.35, dmg = 14, speed = 230, count = 12, pierce = 1, life = 1.6, size = 7, homing = 1.6 },
+      cd = 1.35, dmg = 10, speed = 230, count = 12, pierce = 1, life = 1.6, size = 7, homing = 1.0 },
 
     -- ---------------- TIPOS SECUNDARIOS ----------------
     { id = 'sludge', name = 'Residuos', type = 'poison', kind = 'projectile',
@@ -355,7 +356,7 @@ local RAW = {
 
     { id = 'psycho-cut', name = 'Psicocorte', type = 'psychic', kind = 'boomerang',
       desc = 'Cuchillas psíquicas que vuelven a ti.',
-      cd = 0.8, dmg = 12, speed = 360, count = 2, spread = 0.6, radius = 200, size = 7 },
+      cd = 0.8, dmg = 9, speed = 360, count = 2, spread = 0.6, radius = 200, size = 7 },
 
     { id = 'spikes', name = 'Púas', type = 'ground', kind = 'mine',
       desc = 'Siembra púas que estallan al pisarlas.',
@@ -398,6 +399,18 @@ local RAW = {
       cd = 0.9, dmg = 17, count = 4, radius = 150, hex = 1.7 }
 }
 M.ALL = RAW
+
+-- Cuerpo a cuerpo (12-10-2026): +20 % de daño y +25 % de alcance y de arco
+-- (y -25 % de daño recibido mientras sea tu ataque activo, en player.lua).
+-- Pegaban bien, pero había que arriesgar mucho más que con los de distancia.
+for i = 1, #RAW do
+    local m = RAW[i]
+    if m.kind == 'melee' then
+        m.dmg = math.floor(m.dmg * 1.2 + 0.5)
+        m.radius = math.floor(m.radius * 1.25 + 0.5)
+        if m.arc then m.arc = math.min(3, math.floor(m.arc * 1.25 * 100 + 0.5) / 100) end
+    end
+end
 
 -- Pool de movimientos por tipo (ids, en orden de aparición). El pool `normal` lo tienen todos.
 local POOL = {}

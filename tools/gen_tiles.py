@@ -512,12 +512,13 @@ def paint_liquid(P, C, tx, ty, m, B=None, frame=0):
                     dist = math.hypot(RO - ux, RO - uy)
                     if dist > RO: skip = True
                     d = min(d, RO - dist)
+            # Esquinas interiores (los dos lados son líquido pero la diagonal no): el
+            # borde y los rebordes de las casillas vecinas giran aquí en ángulo, sin
+            # meter hierba dentro del agua (antes quedaba un pegote verde).
             for solid_a, solid_b, diag, ux, uy in ((n, w, nw, cxp, cyp), (n, e, ne, ix, cyp),
                                                    (s, w, sw, cxp, iy), (s, e, se, ix, iy)):
                 if solid_a and solid_b and not diag:
-                    dist = math.hypot(ux, uy)
-                    if dist < RI: skip = True
-                    d = min(d, dist - RI)
+                    d = min(d, max(ux, uy) - 0.5)
             if skip:
                 continue
             gx, gy = tx * T + x, ty * T + y

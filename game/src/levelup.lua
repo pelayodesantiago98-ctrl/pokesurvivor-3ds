@@ -9,19 +9,19 @@ local STATS = {
     { id = 'hp',   icon = 'heart',  title = 'Vigor',       desc = '+20 de vida máxima (y la recupera).',
       apply = function(pl) pl:addMaxHp(20) end },
     { id = 'atk',  icon = 'fist',   title = 'Potencia',    desc = '+10% de daño con todos los movimientos.',
-      apply = function(pl) pl.atkMul = pl.atkMul * 1.10 end },
+      apply = function(pl) pl.atkMul = pl.atkMul * 1.10 end, max = 40 },
     { id = 'spd',  icon = 'boot',   title = 'Carrera',     desc = '+7% de velocidad de movimiento.',
-      apply = function(pl) pl.spdMul = pl.spdMul * 1.07 end },
+      apply = function(pl) pl.spdMul = pl.spdMul * 1.07 end, max = 8 },
     { id = 'cd',   icon = 'clock',  title = 'Reflejos',    desc = '-8% de recarga en todos los movimientos.',
-      apply = function(pl) pl.cdMul = pl.cdMul * 0.92 end },
+      apply = function(pl) pl.cdMul = pl.cdMul * 0.92 end, max = 10 },
     { id = 'def',  icon = 'shield', title = 'Coraza',      desc = '+6% de reducción de daño recibido.',
-      apply = function(pl) pl.dmgReduce = math.min(0.7, pl.dmgReduce + 0.06) end },
+      apply = function(pl) pl.dmgReduce = math.min(0.7, pl.dmgReduce + 0.06) end, max = 12 },
     { id = 'rgn',  icon = 'sprout', title = 'Síntesis',    desc = '+0.9 de vida regenerada por segundo.',
       apply = function(pl) pl.regenFlat = pl.regenFlat + 0.9 end },
     { id = 'mag',  icon = 'magnet', title = 'Imán',        desc = '+30% de radio de recogida de experiencia.',
-      apply = function(pl) pl.magnet = pl.magnet * 1.30 end },
+      apply = function(pl) pl.magnet = pl.magnet * 1.30 end, max = 6 },
     { id = 'xp',   icon = 'book',   title = 'Aprendizaje', desc = '+12% de experiencia ganada.',
-      apply = function(pl) pl.xpMul = pl.xpMul * 1.12 end },
+      apply = function(pl) pl.xpMul = pl.xpMul * 1.12 end, max = 8 },
     { id = 'heal', icon = 'berry',  title = 'Baya Zidra',  desc = 'Recupera el 45% de tu vida ahora mismo.',
       apply = function(pl) pl:heal(pl.maxHp * 0.45) end },
 }
@@ -93,9 +93,13 @@ local function candidates(pl)
     end
 
     -- Stats: las que desbloquean una evolución salen siempre y con aviso.
+    -- Cada mejora tiene un tope de veces (`max`): en partidas muy largas se
+    -- acumulaban sin fin (velocidad, recarga y experiencia por las nubes) y el
+    -- juego acababa colgándose. Las que piden una evolución salen siempre.
     local free, forced = {}, {}
     for _, s in ipairs(STATS) do
-        if waiting[s.id] then forced[#forced + 1] = s else free[#free + 1] = s end
+        if waiting[s.id] then forced[#forced + 1] = s
+        elseif not s.max or (pl.statsTaken[s.id] or 0) < s.max then free[#free + 1] = s end
     end
     local pickStats = U.pickN(free, 5)
     for _, s in ipairs(forced) do pickStats[#pickStats + 1] = s end
@@ -123,6 +127,12 @@ end
 function L.offer(pl, n)
     n = n or 3
     local pool = candidates(pl)
+    -- Fuera lo vetado (las evoluciones no se pueden vetar).
+    if pl.banned then
+        for i = #pool, 1, -1 do
+            if pool[i].type ~= 'evo' and pl.banned[pool[i].key] then table.remove(pool, i) end
+        end
+    end
     local picked, used = {}, {}
     -- Si hay una evolución lista, su carta dorada sale siempre.
     for i, c in ipairs(pool) do

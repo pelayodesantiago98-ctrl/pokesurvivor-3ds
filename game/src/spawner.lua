@@ -129,7 +129,8 @@ function S.update(dt, pl, t)
     -- Jefes
     local bosses = stage and G.Stages.bosses() or G.Enemies.BOSSES()
     local b = bosses[bossIdx]
-    if b and t >= b.at then spawnBoss(pl, t, b); bossIdx = bossIdx + 1 end
+    -- Un solo jefe a la vez: si aún queda uno vivo, el siguiente espera.
+    if b and t >= b.at and not G.EnemyMgr.bossAlive() then spawnBoss(pl, t, b); bossIdx = bossIdx + 1 end
 
     -- Combate de jefe: las oleadas bajan al 25% y no hay mareas.
     local bossFight = G.EnemyMgr.bossAlive()

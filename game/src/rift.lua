@@ -27,6 +27,8 @@ local floor, min, max, cos, sin, random = math.floor, math.min, math.max, math.c
 local lg = love.graphics
 
 -- (0.14 hasta el 11-10-2026: más grietas para que se vean los vínculos)
+-- Menos azar (12-10-2026): cada vez que no sale, la siguiente es más
+-- probable (20 %, 40 %, 60 %, 80 %, 100 %): como mucho 2,5 min sin grieta.
 local CHECK, CHANCE, TTL = 30, 0.2, 45
 local ARENA_R, ARENA_TIME, FROM = 11, 120, 75
 R.TTL, R.ARENA_TIME = TTL, ARENA_TIME
@@ -34,6 +36,7 @@ R.TTL, R.ARENA_TIME = TTL, ARENA_TIME
 local rift = nil           -- { x, y, ttl, t }
 local arena = nil          -- { tx, ty, r, dex, shiny, type, x, y, backX, backY, biome, t, phase, endT, bossId }
 local checkT, asked, downT = CHECK, false, 0
+local misses = 0           -- intentos seguidos sin grieta (cada uno la hace más probable)
 local nextType = nil       -- pruebas/vídeos: tipo de la próxima arena
 local legendPool = nil     -- legendarios con sprite (se calcula una vez)
 
@@ -48,7 +51,7 @@ local function TS() return ((G.Tiles and G.Tiles.T) or 16) * G.Sprites.PX end
 
 function R.reset()
     rift = nil; arena = nil
-    checkT = CHECK; asked = false; downT = 0
+    checkT = CHECK; asked = false; downT = 0; misses = 0
 end
 
 -- ---------------- grieta en el mapa ----------------
@@ -173,7 +176,22 @@ start = function(forceType)
     nextType = nil
     local list = pool(forceType)
     if #list == 0 then return end
-    local mon = U.pick(list)
+    -- Los legendarios que aún no has vencido salen 4 veces más (menos repetidos).
+    -- (Las claves de `legends` pueden ser números o textos si vienen del JSON.)
+    local beaten = (G.DB.save and G.DB.save.legends) or {}
+    local function weight(p)
+        if beaten[p.dex] ~= nil or beaten[tostring(p.dex)] ~= nil then return 1 end
+        return 4
+    end
+    local total = 0
+    for i = 1, #list do total = total + weight(list[i]) end
+    local r, mi = random() * total, 1
+    while mi < #list do
+        r = r - weight(list[mi])
+        if r <= 0 then break end
+        mi = mi + 1
+    end
+    local mon = list[mi]
     local type = forceType
     if not type then
         -- La arena es la de uno de sus tipos, al azar (y que exista como arena).
@@ -274,7 +292,11 @@ function R.update(dt, pl, time)
         checkT = checkT - dt
         if checkT <= 0 then
             checkT = CHECK
-            if random() < CHANCE and not G.EnemyMgr.bossAlive() then open() end
+            -- Con un jefe vivo no cuenta como intento.
+            if not G.EnemyMgr.bossAlive() then
+                if random() < CHANCE * (1 + misses) then misses = 0; open()
+                else misses = misses + 1 end
+            end
         end
     end
     if arena then arenaTick(dt, pl) end

@@ -104,6 +104,7 @@ require("src.progress")
 require("src.evolution")
 require("src.stages")
 require("src.difficulty")
+require("src.burst")
 require("src.game")
 require("src.ui.ui")
 require("src.ui.pixelfont")
@@ -185,7 +186,9 @@ function love.load()
                     local ang = k / 64 * 6.2832
                     local x, y = math.cos(ang) * r * 32, math.sin(ang) * r * 32
                     if W.isLiquid(x, y) and W.isLiquid(x + 40, y) and W.isLiquid(x - 40, y) and W.isLiquid(x, y + 48) then
-                        pl.x, pl.y = x, y; done = true; break
+                        pl.x, pl.y = x, y; done = true
+                        G.Camera.x, G.Camera.y = x, y     -- (puede estar en pausa por las cartas)
+                        break
                     end
                 end
                 if done then break end
@@ -223,6 +226,50 @@ end
 
 local soakStarted = false
 local demo = false
+
+-- `--tour`: recorre solo todas las pantallas (para enseñarlas o revisarlas) y guarda
+-- una captura de cada una en la carpeta de guardado (tour_NN_nombre.png).
+local tour = nil
+for _, a in ipairs(arg or {}) do
+    if a == "--tour" then
+        local UI = function(n) return function() G.UI.show(n) end end
+        tour = { i = 0, t = 0, steps = {
+            { "titulo", 3, UI("title") },
+            { "menu", 4, UI("menu") },
+            { "pokedex", 4, UI("dex") },
+            { "tarjeta", 4, UI("card") },
+            { "mejoras", 4, UI("upgrades") },
+            { "gacha", 4, UI("gacha") },
+            { "misiones", 4, UI("goals") },
+            { "fases", 4, UI("stages") },
+            { "inicial", 4, UI("starters") },
+            { "partida", 7, function() G.UI.show("menu"); G.Flow.debugStartRun() end },
+            { "subida_nivel", 4, function() G.Game.debugLevelUp() end },
+            { "pausa", 4, function()
+                if G.UI.current() == "cards" then G.UI.pressButton("a") end
+                G.Game.togglePause() end },
+            { "derrota", 5, function() G.Game.togglePause(); G.Game.debugDie() end },
+            { "menu_final", 4, function() G.Flow.goMenu() end },
+        } }
+    end
+end
+local function tourUpdate(dt)
+    tour.t = tour.t - dt
+    if tour.shotIn and tour.t <= tour.shotIn then
+        tour.shotIn = nil
+        local st = tour.steps[tour.i]
+        love.graphics.captureScreenshot(string.format("tour_%02d_%s.png", tour.i, st[1]))
+    end
+    if tour.t > 0 then return end
+    tour.i = tour.i + 1
+    local st = tour.steps[tour.i]
+    if not st then print("TOUR_OK"); tour = nil; return end
+    print("TOUR " .. tour.i .. " " .. st[1])
+    local ok, err = pcall(st[3])
+    if not ok then print("TOUR_ERROR " .. st[1] .. ": " .. tostring(err)) end
+    tour.t = st[2]
+    tour.shotIn = st[2] - 1.6            -- captura a los 1,6 s de entrar
+end
 local shotAt, shotT = nil, 0     -- `--shot=N`: guarda shot.png en la carpeta de guardado a los N s y sale
 for _, a in ipairs(arg or {}) do
     if a == "--demo" then demo = true end
@@ -241,6 +288,7 @@ function love.update(dt)
             love.event.quit()
         end
     end
+    if tour then tourUpdate(dt) end
     if demo then
         -- Modo demostración: juega solo a velocidad normal; al caer, vuelve a empezar.
         if G.Game.state() == "ui" or G.Game.state() == "over" then

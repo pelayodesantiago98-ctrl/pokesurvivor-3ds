@@ -126,13 +126,29 @@ function hud.draw()
     local by = H - 20
     if pl.item then
         G.Icons.draw(pl.item, 8, by - 3, 22)
-        UI.text(G.Items.BY[pl.item].name, 32, by + 2, { size = 12, color = "#ffffff" })
+        UI.text(G.Items.BY[pl.item].name, 32, by + 3, { size = 10, color = "#ffffff", w = 84 })
     else
-        UI.text("Sin objeto", 10, by + 2, { size = 12, color = "#c8c0e0" })
+        UI.text("Sin objeto", 10, by + 3, { size = 10, color = "#c8c0e0" })
     end
     if pl.bonds > 0 then
-        G.Icons.draw("bond", 168, by, 16)
-        UI.text("x" .. pl.bonds, 186, by + 2, { size = 12, color = UI.C.pink })
+        G.Icons.draw("bond", 118, by, 14)
+        UI.text("x" .. pl.bonds, 133, by + 3, { size = 10, color = UI.C.pink })
+    end
+    -- Ataque Burst: barra que se carga; llena, botón que late (X en el mando).
+    local bx, bw = 152, 94
+    local col = U.TYPE_COLOR[pl.mon.types[1]] or "#ffd23f"
+    if G.Burst.ready(pl) then
+        UI.button("burst", bx, by, bw, 18, "¡BURST!", { size = 10, color = col })
+        U.setColor("#ffffff", 0.25 + 0.25 * math.sin(U.now() * 8))
+        lg.rectangle("fill", bx + 2, by + 2, bw - 4, 14, 5, 5)
+        lg.setColor(1, 1, 1, 1)
+    else
+        U.setColor("#2a2440")
+        lg.rectangle("fill", bx, by + 1, bw, 16, 5, 5)
+        U.setColor(col, 0.85)
+        lg.rectangle("fill", bx + 2, by + 3, math.max(0, (bw - 4) * (pl.burst or 0)), 12, 4, 4)
+        G.PixelFont.print("BURST " .. math.floor((pl.burst or 0) * 100) .. "%", bx + 8, by + 6,
+                          { s = 1, color = "#ffffff", shadow = "#2a2440" })
     end
     UI.button("pause", W - 66, by, 58, 18, "Pausa", { size = 10, color = "#4a4468" })
 end
@@ -316,27 +332,8 @@ function R.moveButton(x, y, w, h, m, fused, active, cd)
             lg.rectangle("fill", px + 1, by + 4, 4, 5)
         end
     end
-    -- Cursor de esquinas rojas (con brillo blanco) en el activo
-    if active then
-        -- Escuadras rojas gruesas con un contorno blanco de 1 px (como en Platino).
-        local L, T = 10, 4
-        local function corner(cx, cy, sx, sy)
-            local hx = sx > 0 and cx or cx - L
-            local hy = sy > 0 and cy or cy - T
-            local vx = sx > 0 and cx or cx - T
-            local vy = sy > 0 and cy or cy - L
-            U.setColor("#ffffff")
-            lg.rectangle("fill", hx - 1, hy - 1, L + 2, T + 2)
-            lg.rectangle("fill", vx - 1, vy - 1, T + 2, L + 2)
-            U.setColor("#f60400")
-            lg.rectangle("fill", hx, hy, L, T)
-            lg.rectangle("fill", vx, vy, T, L)
-        end
-        corner(x - 2, y - 2, 1, 1)
-        corner(x + w + 2, y - 2, -1, 1)
-        corner(x - 2, y + h + 2, 1, -1)
-        corner(x + w + 2, y + h + 2, -1, -1)
-    end
+    -- Marco de selección en el activo (el mismo de los menús)
+    if active then UI.selectFrame(x, y, w, h) end
     lg.setColor(1, 1, 1, 1)
 end
 
@@ -345,8 +342,12 @@ function hud.touch(x, y)
     if not id then return end
     local pl = G.Game.player()
     if id == "pause" then G.Game.togglePause() return end
+    if id == "burst" then G.Burst.fire(pl) return end
     local i = tonumber(id:match("^slot(%d+)$"))
     if i and pl and G.Game.state() == "playing" and pl.active ~= i then pl:setActive(i); G.Audio.sfx("click") end
+end
+function hud.button(b)
+    if b == "x" then G.Burst.fire(G.Game.player()) end
 end
 
 UI.register("hud", hud)
@@ -388,14 +389,33 @@ function cards.draw()
     if cur.sub then UI.text(cur.sub, 10, 24, { size = 10, color = UI.C.muted, w = W - 20, align = "center" }) end
     local n = #cur.list
     local top = cur.sub and 40 or 28
-    local avail = H - top - (cur.back and 30 or 8)
+    local tools = cur.opts ~= nil                 -- repetir / vetar
+    local avail = H - top - ((cur.back or tools) and 30 or 8)
     local h = math.min(60, math.floor((avail - (n - 1) * 6) / math.max(1, n)))
     for i, c in ipairs(cur.list) do
         local y = top + (i - 1) * (h + 6)
         drawCard(c, 8, y, W - 16, h, i == cur.focus)
+        if cur.banning and c.type ~= "evo" then
+            -- Modo vetar: las cartas se marcan en rojo
+            U.setColor("#d04848", 0.35)
+            lg.rectangle("fill", 8, y, W - 16, h, 6, 6)
+            lg.setColor(1, 1, 1, 1)
+        end
         UI.hitbox("card" .. i, 8, y, W - 16, h)
     end
     if cur.back then UI.button("back", W / 2 - 50, H - 28, 100, 22, "Atrás", { size = 10 }) end
+    if tools then
+        local rr, bb = cur.opts.left()
+        UI.button("reroll", 8, H - 27, 148, 22, "Repetir (" .. rr .. ")", { size = 10, color = "#3c6cc4", enabled = rr > 0 })
+        UI.button("ban", W - 156, H - 27, 148, 22, cur.banning and "Toca la carta a vetar" or ("Vetar (" .. bb .. ")"),
+                  { size = 10, color = "#d04848", enabled = bb > 0, on = cur.banning })
+    end
+end
+
+-- Cambia las cartas mostradas (tras repetir o vetar).
+local function replaceList(list)
+    if list and #list > 0 then cur.list = list; cur.focus = 1 end
+    cur.banning = false
 end
 
 local function pickCard(i)
@@ -410,7 +430,16 @@ function cards.touch(x, y)
     local id = UI.hit(x, y)
     if not id then return end
     if id == "back" and cur and cur.onBack then cur.onBack() return end
+    if cur and cur.opts then
+        if id == "reroll" then G.Audio.sfx("select"); replaceList(cur.opts.reroll()) return end
+        if id == "ban" then cur.banning = not cur.banning; G.Audio.sfx("click") return end
+    end
     local i = tonumber(id:match("^card(%d+)$"))
+    if i and cur and cur.banning then
+        local c = cur.list[i]
+        if c and c.type ~= "evo" then G.Audio.sfx("back"); replaceList(cur.opts.ban(c)) end
+        return
+    end
     if i then pickCard(i) end
 end
 
@@ -418,14 +447,22 @@ function cards.button(b)
     if not cur then return end
     if b == "dpup" or b == "dpleft" then cur.focus = (cur.focus - 2) % #cur.list + 1; G.Audio.sfx("select")
     elseif b == "dpdown" or b == "dpright" then cur.focus = cur.focus % #cur.list + 1; G.Audio.sfx("select")
-    elseif b == "a" then pickCard(cur.focus)
+    elseif b == "a" then
+        if cur.banning then
+            local c = cur.list[cur.focus]
+            if c and c.type ~= "evo" then replaceList(cur.opts.ban(c)) end
+        else pickCard(cur.focus) end
+    elseif b == "x" and cur.opts then replaceList(cur.opts.reroll())       -- X: repetir
+    elseif b == "y" and cur.opts then cur.banning = not cur.banning        -- Y: modo vetar
+    elseif b == "b" and cur.banning then cur.banning = false
     elseif b == "b" and cur.onBack then cur.onBack() end
 end
 
 UI.register("cards", cards)
 
-function R.showLevelUp(level, list, cb)
-    UI.show("cards", { title = "¡Nivel " .. level .. "!", sub = "Elige una recompensa", list = list, cb = cb })
+-- opts (opcional): { left() -> repeticiones, vetos; reroll() -> lista; ban(carta) -> lista }
+function R.showLevelUp(level, list, cb, opts)
+    UI.show("cards", { title = "¡Nivel " .. level .. "!", sub = "Elige una recompensa", list = list, cb = cb, opts = opts })
 end
 
 -- Has encontrado un objeto llevando ya otro: ¿con cuál te quedas?

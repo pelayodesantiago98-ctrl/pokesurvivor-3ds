@@ -86,6 +86,10 @@ function Player.new(mon, perks, shiny)
     self.level = 1
     self.xp = 0
     self.xpNext = Player.xpFor(1)
+    -- Pantalla de mejoras (idea de Pokémon Survivor Burst): repetir la tirada y
+    -- vetar cartas (lo vetado no vuelve a salir en la run).
+    self.rerolls, self.bans, self.banned = 2, 2, {}
+    self.burst = 0             -- barra del ataque Burst (0..1)
     self.kills = 0
     self.bosses = 0
     self.coins = 0             -- monedas recogidas en esta run
@@ -282,7 +286,14 @@ function Player:hurt(amount, ty)
         eff = G.Types.label(k)
         amount = amount * k * G.Weather.mult(ty)
     end
-    local d = max(1, amount * (1 - self:reduction()))
+    -- Con un ataque cuerpo a cuerpo activo se recibe un 25 % menos: hay que
+    -- estar encima de los enemigos para pegar (iban muy por detrás).
+    local close = 1
+    local g = self:activeGroup()
+    for i = 1, #g do
+        if g[i].kind == 'melee' then close = 0.75 break end
+    end
+    local d = max(1, amount * (1 - self:reduction()) * close)
     self.hp = self.hp - d
     if G_SOAK then
         -- Pruebas aceleradas: de dónde viene el último golpe (se muestra al morir).

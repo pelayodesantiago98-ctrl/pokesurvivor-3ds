@@ -19,6 +19,8 @@ local biome = -1
 local deathT = 0
 local flashT, flashDur, flashCol = 0, 1, "#ffffff"
 local frameDt = 0
+-- Tickets de esta partida que ya están en la partida guardada (ver bankTickets).
+local banked1, banked10 = 0, 0
 
 G.BIOME_MUSIC = { "forest", "cave", "volcano" }
 
@@ -65,6 +67,7 @@ function Game.startRun(stageIdx)
     time = 0; pendingLevels = 0
 
     pl = G.Player.new(mon, perks, save.partnerShiny and G.DB.ownsShiny(mon.dex))
+    banked1, banked10 = 0, 0
     caught = {}
     pl:addMove(G.startMoveOf(mon.dex))
     -- Mejora "Repertorio": un segundo movimiento de ataque al azar.
@@ -136,6 +139,23 @@ function Game.onShinyCaught(e)
     G.Audio.sfx("shinyGet")
 end
 
+-- Los tickets recogidos se guardan en cuanto los coges (como los shinies):
+-- antes sólo al acabar, y si se apagaba la consola a mitad se perdían.
+-- Sólo se suma lo que aún no estaba guardado (banked1/banked10), así que
+-- endRun no los cuenta dos veces.
+-- @param commit  false = no escribir aún (endRun guarda luego todo junto)
+local function bankTickets(commit)
+    local sv = G.DB.save
+    if not sv or not pl then return end
+    sv.tickets = sv.tickets or { t1 = 0, t10 = 0 }
+    local d1, d10 = math.max(0, pl.t1 - banked1), math.max(0, pl.t10 - banked10)
+    if d1 == 0 and d10 == 0 then return end
+    sv.tickets.t1 = (sv.tickets.t1 or 0) + d1
+    sv.tickets.t10 = (sv.tickets.t10 or 0) + d10
+    banked1, banked10 = pl.t1, pl.t10
+    if commit ~= false then G.DB.commit() end
+end
+
 -- @param won  true si se ha superado la fase (modo Fases)
 function Game.endRun(dead, won)
     if dead == nil then dead = true end
@@ -165,9 +185,7 @@ function Game.endRun(dead, won)
     local record = time > (save.stats.bestTime or 0)
 
     save.coins = save.coins + coins
-    save.tickets = save.tickets or { t1 = 0, t10 = 0 }
-    save.tickets.t1 = save.tickets.t1 + pl.t1
-    save.tickets.t10 = save.tickets.t10 + pl.t10
+    bankTickets(false)          -- los que falten (normalmente ya están guardados)
     save.stats.runs = (save.stats.runs or 0) + 1
     save.stats.totalKills = (save.stats.totalKills or 0) + pl.kills
     save.stats.bestTime = math.max(save.stats.bestTime or 0, math.floor(time))
@@ -204,7 +222,21 @@ local function maybeLevelUp()
         G.Audio.sfx("confirm")
         card.apply(pl)
         state = "playing"
-    end)
+    end, {
+        -- Repetir / vetar (idea de Pokémon Survivor Burst)
+        left = function() return pl.rerolls, pl.bans end,
+        reroll = function()
+            if pl.rerolls <= 0 then return nil end
+            pl.rerolls = pl.rerolls - 1
+            return G.LevelUp.offer(pl)
+        end,
+        ban = function(c)
+            if pl.bans <= 0 or c.type == "evo" then return nil end
+            pl.bans = pl.bans - 1
+            pl.banned[c.key] = true
+            return G.LevelUp.offer(pl)
+        end,
+    })
 end
 
 -- ---------------- vínculos ----------------
@@ -268,6 +300,7 @@ local function onCollect(p, who)
     if kind == "item" then Game.offerItem(p.value) return end
     if kind == "ticket" or kind == "ticket10" then
         if kind == "ticket" then pl.t1 = pl.t1 + 1 else pl.t10 = pl.t10 + 1 end
+        bankTickets()
         G.FX.dmgText(who.x, who.y - who.bodyH - 8, kind == "ticket" and "+1 ticket" or "¡Ticket x10!",
                      kind == "ticket" and "#ffd23f" or "#d9a6ff", true)
         G.FX.ring(who.x, who.y, 6, 50, kind == "ticket" and "#ffd23f" or "#c47bff", 0.4, 3)
@@ -336,7 +369,12 @@ local function update(dt)
     end
     time = time + dt
 
-    local b = math.floor(time / 240)
+    -- Una run cambia de bioma cada 4 min y recorre toda la lista (normales y
+    -- los de las arenas); al acabarse, vuelve a empezar. (Antes, pasado el
+    -- último, hacia el minuto 84, se pedía un bioma que no existe y el juego
+    -- se rompía; World.setBiome sólo da la vuelta a los normales.)
+    local nb = G.Tiles.ARENA + #G.Tiles.ARENA_TYPES
+    local b = math.floor(time / 240) % nb
     if G.Stages.active() then b = biome end     -- en una fase el bioma es fijo
     if b ~= biome and not G.Rift.inArena() then
         biome = b
@@ -649,7 +687,8 @@ function Game.autoplay(dt)
     local scr = G.UI.current()
     if scr == "cards" then G.UI.pressButton("a")
     elseif scr == "pause" then Game.togglePause()
-    elseif state == "playing" and pl and pl.bonds > 0 then Game.offerBond(true) end
+    elseif state == "playing" and pl and pl.bonds > 0 then Game.offerBond(true)
+    elseif state == "playing" and G.Burst.ready(pl) then G.Burst.fire(pl) end
 end
 
 -- Depuración: fuerza una subida de nivel o la caída del jugador.

@@ -80,12 +80,14 @@ end
 -- Fondo de las pantallas táctiles al estilo de DS: base oscura con rayas
 -- diagonales suaves (como los menús de Negro/Blanco) y una franja más clara abajo.
 function UI.background()
+    -- El mismo fondo que la pantalla de movimientos de Platino: morado con la
+    -- Poké Ball grande y su borde (G.RunUI.platinumBackground).
+    if G.RunUI and G.RunUI.platinumBackground then
+        G.RunUI.platinumBackground(0)
+        return
+    end
     U.setColor(UI.C.bg)
     lg.rectangle("fill", 0, 0, UI.W, UI.H)
-    U.setColor("#ffffff", 0.035)
-    for x0 = -UI.H, UI.W, 14 do
-        lg.polygon("fill", x0, UI.H, x0 + 6, UI.H, x0 + 6 + UI.H, 0, x0 + UI.H, 0)
-    end
     lg.setColor(1, 1, 1, 1)
 end
 
@@ -196,26 +198,24 @@ local function btnPal(col)
 end
 
 -- Cursor de esquinas rojo (como el de la botonera de combate de Platino).
--- Cada esquina: una "L" de 7 px de brazo y 3 de grosor, 2 px por fuera del botón,
--- con un contorno blanco de 1 px.
-local CORNERS = { { 0, 0, 1, 1 }, { 1, 0, -1, 1 }, { 0, 1, 1, -1 }, { 1, 1, -1, -1 } }
-function UI.cornerCursor(x, y, w, h)
-    local L = math.max(4, math.min(7, math.floor(math.min(w, h) / 3)))
-    local T = h < 20 and 2 or 3
-    for pass = 1, 2 do
-        local o = pass == 1 and 1 or 0                     -- 1: contorno blanco; 0: rojo
-        U.setColor(pass == 1 and "#ffffff" or "#e83030")
-        for _, c in ipairs(CORNERS) do
-            local sx, sy = c[3], c[4]
-            local px = x + c[1] * w - sx * (2 + o)         -- vértice exterior de la L
-            local py = y + c[2] * h - sy * (2 + o)
-            local len, th = L + o * 2, T + o * 2
-            lg.rectangle("fill", sx > 0 and px or px - len, sy > 0 and py or py - th, len, th)
-            lg.rectangle("fill", sx > 0 and px or px - th, sy > 0 and py or py - len, th, len)
-        end
-    end
+-- Marco de selección (como el de los menús de HGSS): borde grueso que late entre
+-- blanco y dorado alrededor del botón, con un contorno oscuro fino para que se vea
+-- sobre cualquier color, y un brillo suave encima del botón.
+function UI.selectFrame(x, y, w, h)
+    local k = (math.sin(U.now() * 6) + 1) / 2
+    local r = math.min(7, h / 2)
+    lg.setColor(1, 1, 1, 0.06 + 0.08 * k)                    -- brillo sobre el botón
+    lg.rectangle("fill", x + 2, y + 2, w - 4, h - 4, r - 1, r - 1)
+    U.setColor("#1a1830")
+    lg.setLineWidth(1)
+    lg.rectangle("line", x - 4.5, y - 4.5, w + 9, h + 9, r + 3, r + 3)
+    U.setColor(U.hexMix("#ffffff", "#ffd23f", k))
+    lg.setLineWidth(3)
+    lg.rectangle("line", x - 2.5, y - 2.5, w + 5, h + 5, r + 2, r + 2)
+    lg.setLineWidth(1)
     lg.setColor(1, 1, 1, 1)
 end
+UI.cornerCursor = UI.selectFrame          -- nombre antiguo
 
 -- Botón tocable al estilo de las pantallas táctiles de DS (4.ª y 5.ª gen): contorno
 -- grueso oscuro, cuerpo a dos tonos con brillo arriba, bisel y sombra; texto blanco
@@ -270,7 +270,7 @@ function UI.button(id, x, y, w, h, label, opts)
     U.setColor(enabled and ((opts and opts.textColor) or "#ffffff") or "#c4c6d4")
     lg.printf(label, tx + 4, ty, tw, al)
     lg.setColor(1, 1, 1, 1)
-    if on then UI.cornerCursor(x, y, w, h) end
+    if on then UI.selectFrame(x, y, w, h) end
     if enabled then addHit(id, x, y, w, h) end
 end
 

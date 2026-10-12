@@ -612,13 +612,23 @@ function Enemy:special(pl, dx, dy)
 end
 
 function Enemy:healAround()
+    -- 7 % de la vida (era 15 %: con varios curanderos curaban más de lo que
+    -- pegabas), y más cuanto más fuerte pegas, pero cada vez menos: con el
+    -- doble de ataque cura un 27 % más, con 10 veces más un 124 %, y como
+    -- mucho ×2,5. (Como los enemigos que tienen más vida si haces más daño.)
+    local pow = 1
+    local pl = G.Game.player()
+    if pl and pl.baseAtk > 0 then
+        local a = pl:atk()
+        if a > 0 then pow = max(1, a / pl.baseAtk) end
+    end
+    local k = 0.07 * min(2.5, pow ^ 0.35)
     local n = 0
     local q, qn = G.EnemyMgr.queryCircle(self.x, self.y, 150)
     for i = 1, qn do
         local e = q[i]
         if not e.dead and e.hp < e.maxHp then
-            -- 7 % (era 15 %: con varios curanderos curaban más de lo que pegabas).
-            e.hp = min(e.maxHp, e.hp + e.maxHp * 0.07)
+            e.hp = min(e.maxHp, e.hp + e.maxHp * k)
             G.FX.burst(e.x, e.y - e.bodyH * 0.6, '#7dffb0', 5, 60)
             n = n + 1
         end
@@ -988,6 +998,7 @@ function M.update(dt, pl)
         if e.dead then
             pl.kills = pl.kills + 1
             if e.boss then pl.bosses = pl.bosses + 1 end
+            G.Burst.add(pl, e.boss and G.Burst.GAIN_BOSS or G.Burst.GAIN_KILL)
             G.Progress.kill(e)
             corpses[#corpses + 1] = e
             drop(i, e)
