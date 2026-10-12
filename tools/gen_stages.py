@@ -38,10 +38,10 @@ DEX = {
 
 # (fichero, nombre en castellano, bioma 0..2 del mundo normal)
 STAGES = [
-    ('phase1.ts', 'Bosque de Kanto I', 0), ('phase2.ts', 'Bosque de Kanto II', 0),
-    ('phase3.ts', 'Bosque de Kanto III', 1), ('phase4.ts', 'Bosque de Kanto IV', 1),
-    ('coast-sp1.ts', 'Costa de Kanto I', 0), ('coast-sp2.ts', 'Costa de Kanto II', 0),
-    ('coast-sp3.ts', 'Costa de Kanto III', 2), ('coast-sp4.ts', 'Costa de Kanto IV', 2),
+    ('phase1.ts', 'Bosque Verde I', 0), ('phase2.ts', 'Bosque Verde II', 0),
+    ('phase3.ts', 'Cueva Cristal I', 1), ('phase4.ts', 'Cueva Cristal II', 1),
+    ('coast-sp1.ts', 'Bosque Verde III', 0), ('coast-sp2.ts', 'Bosque Verde IV', 0),
+    ('coast-sp3.ts', 'Monte Ascuas I', 2), ('coast-sp4.ts', 'Monte Ascuas II', 2),
 ]
 STAGE_LEN = 600
 

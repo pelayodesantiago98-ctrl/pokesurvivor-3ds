@@ -122,7 +122,12 @@ end
 function S.gc(keep, keepFull)
     local set = {}
     if keep then
-        if #keep > 0 then for i = 1, #keep do set[keep[i]] = true end
+        -- ¿Lista de dex ({25, 4}) o conjunto ({[25]=true})? Se mira el valor, no `#keep`:
+        -- un conjunto con los dex 1 y 2 (Bulbasaur/Ivysaur) tiene `#keep > 0` y antes se
+        -- tomaba por lista (cierre por índice nil y se soltaban hojas que hacían falta).
+        local isList = false
+        for _, v in pairs(keep) do isList = type(v) == "number"; break end
+        if isList then for _, d in pairs(keep) do set[d] = true end
         else set = keep end
     end
     for key, sh in pairs(sheets) do

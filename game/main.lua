@@ -28,9 +28,14 @@ for _, a in ipairs(arg or {}) do
     if tm then startTime = tonumber(tm) end
 end
 -- Traza a fichero (solo en modo smoke): si el proceso se cuelga, dice hasta dónde llegó.
+local traceName = "smoke-trace.txt"          -- `--tag=X`: smoke-trace-X.txt (pruebas en paralelo)
+for _, a in ipairs(arg or {}) do
+    local tg = a:match("^%-%-tag=([%w_%-]+)$")
+    if tg then traceName = "smoke-trace-" .. tg .. ".txt" end
+end
 local function trace(s)
     if not smokeFrames then return end
-    local f = io.open((love.filesystem.getSourceBaseDirectory and love.filesystem.getSourceBaseDirectory() or ".") .. "/build/smoke-trace.txt", "a")
+    local f = io.open((love.filesystem.getSourceBaseDirectory and love.filesystem.getSourceBaseDirectory() or ".") .. "/build/" .. traceName, "a")
     if f then f:write(os.date("%H:%M:%S ") .. tostring(s) .. "\n") f:close() end
 end
 if smokeFrames then
@@ -98,6 +103,7 @@ require("src.gacha")
 require("src.progress")
 require("src.evolution")
 require("src.stages")
+require("src.difficulty")
 require("src.game")
 require("src.ui.ui")
 require("src.ui.pixelfont")
@@ -247,28 +253,77 @@ function love.update(dt)
     end
     if soakSeconds then
         -- Prueba de resistencia: 8 pasos de simulación por fotograma, jugador automático.
+        local S = G_SOAK
         if not soakStarted then
             soakStarted = true; G.Input.auto = true
-            G.Flow.debugStartRun(soakStage)
-            if startLevel then G.Game.debugSetLevel(startLevel) end
-            if startTime then G.Game.debugTime(startTime) end
-            for _, a in ipairs(arg or {}) do if a == "--killbosses" then G.Game.autoKillBosses = true end end
+            S = { sim = 0, runs = 0, deaths = 0, wins = 0, maxStep = 0, stuck = 0, lastT = -1, uiT = 0, memMax = 0 }
+            G_SOAK = S
+            for _, a in ipairs(arg or {}) do
+                if a == "--mortal" then S.mortal = true end
+                if a == "--killbosses" then S.kill = true end
+                local df = a:match("^%-%-difficulty=(%a+)$")
+                if df then G.DB.save.difficulty = df end
+                local pd = tonumber(a:match("^%-%-partner=(%d+)$") or "")
+                if pd then G.DB.save.partner = pd; G.DB.grant(pd, "debug") end
+            end
+            S.start = function()
+                S.runs = S.runs + 1
+                G.Game.demo = S.mortal or false               -- mortal: sin invulnerabilidad
+                G.Flow.debugStartRun(soakStage)
+                if startLevel then G.Game.debugSetLevel(startLevel) end
+                if startTime then G.Game.debugTime(startTime) end
+                G.Game.autoKillBosses = S.kill or false
+            end
+            S.start()
         end
         for i = 1, 8 do
+            local c0 = os.clock()
             G.Game.frame(1 / 30)
             G.UI.update(1 / 30)
             G.Game.autoplay(1 / 30)
             Input.endFrame()
+            local ms = (os.clock() - c0) * 1000
+            if ms > S.maxStep then S.maxStep = ms; S.maxAt = G.Game.time() end
+            S.sim = S.sim + 1 / 30
         end
         local t = G.Game.time()
-        if math.floor(t) % 30 == 0 and math.floor(t) ~= (G_SOAK_LAST or -1) then
-            G_SOAK_LAST = math.floor(t)
-            trace(string.format("soak t=%d estado=%s enemigos=%d fx=%d proy=%d hojas=%d mem=%dKB", t, tostring(G.Game.state()),
+        local st = G.Game.state()
+        -- Atascos: el reloj de la partida no avanza estando en juego, o una pantalla
+        -- (cartas, pausa...) que no se cierra.
+        if st == "playing" then
+            if t <= S.lastT then S.stuck = S.stuck + 8 / 30 else S.stuck = 0 end
+            S.uiT = 0
+        else
+            S.uiT = S.uiT + 8 / 30
+        end
+        S.lastT = t
+        S.memMax = math.max(S.memMax, collectgarbage("count"))
+        if S.stuck > 20 or S.uiT > 60 then
+            print(string.format("SOAK_STUCK t=%.1f estado=%s ui=%s parado=%.0fs", t, tostring(st), tostring(G.UI.current()), math.max(S.stuck, S.uiT)))
+            trace("ATASCO estado=" .. tostring(st) .. " ui=" .. tostring(G.UI.current()))
+            os.exit(2)
+        end
+        if math.floor(S.sim) % 30 == 0 and math.floor(S.sim) ~= (G_SOAK_LAST or -1) then
+            G_SOAK_LAST = math.floor(S.sim)
+            trace(string.format("soak sim=%d run=%d t=%d nivel=" .. (G.Game.player() and G.Game.player().level or 0) .. " estado=%s enemigos=%d fx=%d proy=%d hojas=%d mem=%dKB", S.sim, S.runs, t, tostring(st),
                 G.EnemyMgr.count(), G.FX.count and G.FX.count() or -1, G.Projectiles.count(), G.Sprites.loadedCount(), collectgarbage("count")))
         end
-        if t >= soakSeconds or G.Game.state() == "over" then
-            print(string.format("SOAK_OK t=%d estado=%s fase_superada=%s mem=%dKB", t, tostring(G.Game.state()),
-                tostring(G.Stages.cleared()), collectgarbage("count")))
+        if st == "over" then
+            -- Fin de partida: en modo mortal se cuenta y se empieza otra (vuelta al menú).
+            if G.Stages.cleared() then S.wins = S.wins + 1 else S.deaths = S.deaths + 1 end
+            if S.deaths <= 3 and S.lastHurt then print(string.format("MUERTE run=%d t=%.0f %s", S.runs, t, S.lastHurt)) end
+            if S.mortal and S.sim < soakSeconds then
+                G.Flow.goMenu()
+                S.lastT = -1
+                S.start()
+                return
+            end
+        end
+        if S.sim >= soakSeconds or st == "over" then
+            local plv = G.Game.player()
+            print(string.format("SOAK_OK sim=%d t=%d runs=%d muertes=%d superadas=%d estado=%s nivel=%s forma=%s derrotados=%s paso_max=%.1fms(t=%d) mem=%dKB mem_max=%dKB",
+                S.sim, t, S.runs, S.deaths, S.wins, tostring(st), plv and plv.level or "?", plv and (plv.form or 1) or "?", plv and plv.kills or "?",
+                S.maxStep, S.maxAt or 0, collectgarbage("count"), S.memMax))
             print("SMOKE_OK")
             love.event.quit()
         end

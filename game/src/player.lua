@@ -36,8 +36,11 @@ local playOpts = { speed = 1, hold = false }
 local drawOpts = { flash = false, softFlash = true, alpha = 1, color = '#ffcb3d' }
 
 -- (×2 y luego ×4 el 2026-10-10: se subía de nivel demasiado rápido.)
+-- Experiencia para pasar del nivel `level` al siguiente. Curva más plana que la de
+-- la web (antes: 8 + 6L + 1.6 L^1.75) para que se llegue a los niveles reales de
+-- evolución (16, 32, 36...): nivel 16 con ~3.000 de exp y 36 con ~16.000.
 function Player.xpFor(level)
-    return floor((8 + level * 6 + level ^ 1.75 * 1.6) * 4)
+    return floor((8 + level * 4 + level ^ 1.5 * 0.4) * 4)
 end
 
 --- @param mon   entrada de G.DEX
@@ -281,6 +284,12 @@ function Player:hurt(amount, ty)
     end
     local d = max(1, amount * (1 - self:reduction()))
     self.hp = self.hp - d
+    if G_SOAK then
+        -- Pruebas aceleradas: de dónde viene el último golpe (se muestra al morir).
+        G_SOAK.lastHurt = string.format("d=%.0f ty=%s liq=%s pos=%d,%d hp=%.0f/%.0f  %s", d, tostring(ty),
+            tostring(G.World.isLiquid(self.x, self.y)), self.x, self.y, self.hp, self.maxHp,
+            (debug.traceback("", 2):gsub("\n%s*", " < "):sub(1, 260)))
+    end
     self.invuln = 0.45
     self.flash = 0.14
     G.Audio.sfx('hurt')

@@ -71,10 +71,11 @@ function Enemy.new(def, x, y, sc, boss)
     self.r = G.Sprites.bodyRadius(def.dex, self.scale)
     self.bodyH = G.Sprites.bodyHeight(def.dex, self.scale)
 
-    self.maxHp = U.round(def.hp * sc.hp)
+    local dif = G.Difficulty.get()             -- Fácil / Medio / Difícil / Extremo
+    self.maxHp = U.round(def.hp * sc.hp * dif.hp)
     self.hp = self.maxHp
     self.spd = def.spd * sc.spd
-    self.dmg = def.dmg * sc.dmg
+    self.dmg = def.dmg * sc.dmg * dif.dmg
     self.xp = def.xp
     self.behavior = def.behavior
 

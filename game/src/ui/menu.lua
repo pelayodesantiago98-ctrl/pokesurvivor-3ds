@@ -90,6 +90,9 @@ function menu.draw()
     -- Barra de arriba: título y monedas
     UI.bar2(0, 22)
     dsText("MENÚ", 8, 4, 12)
+    -- Dificultad (toca para cambiar; L/R con el mando)
+    local dif = G.Difficulty.get()
+    UI.button("difficulty", 54, 2, 118, 18, "Dificultad: " .. dif.name, { size = 10, color = dif.color })
     -- Monedas con su icono delante
     local coins = s.coins .. " monedas"
     local cw = UI.font(12):getWidth(coins)
@@ -138,11 +141,19 @@ local function go(id)
     elseif id == "goals" then UI.show("goals")
     elseif id == "starters" then UI.show("starters") end
 end
+local function cycleDifficulty(step)
+    local d = G.Difficulty.cycle(step)
+    G.Audio.sfx("select")
+    UI.toast("Dificultad: " .. d.name .. string.format("  (enemigos x%.2f vida, x%.2f daño · monedas x%.2f)", d.hp, d.dmg, d.reward), 2.6)
+end
 function menu.touch(x, y)
     local id = UI.hit(x, y)
+    if id == "difficulty" then cycleDifficulty(1) return end
     if id then go(id) end
 end
 function menu.button(b)
+    if b == "rightshoulder" then cycleDifficulty(1) return end
+    if b == "leftshoulder" then cycleDifficulty(-1) return end
     if b == "dpdown" then focus = (focus + 1 <= #ITEMS) and focus + 2 or focus; if focus > #ITEMS then focus = focus - 2 end
     elseif b == "dpup" then focus = math.max(1, focus - 2)
     elseif b == "dpright" then focus = math.min(#ITEMS, focus + 1)
@@ -538,7 +549,7 @@ local function stageInfo()
         else
             UI.text("Derrota al jefe final para superar la fase", 0, 196, { size = 12, w = 400, align = "center" })
         end
-        UI.text("Tu Pokémon evoluciona al nivel 16 y al 36 durante la partida", 0, 218, { size = 10, color = UI.C.muted, w = 400, align = "center" })
+        UI.text("Tu Pokémon evoluciona durante la partida a sus niveles de los juegos", 0, 218, { size = 10, color = UI.C.muted, w = 400, align = "center" })
     end
 end
 function stages.enter()

@@ -2,7 +2,7 @@
 -- Cada fase: 20 oleadas de 30 s ({ {dex, peso}, ..., rate = ms entre apariciones, cap = tope }) y jefes
 -- repartidos en los 600 s; el último jefe marca el final de la fase.
 return {
-  { id = 1, name = "Bosque de Kanto I", biome = 0, length = 600,
+  { id = 1, name = "Bosque Verde I", biome = 0, length = 600,
     bosses = { { dex = 20, at = 200 }, { dex = 24, at = 400 }, { dex = 34, at = 600 } },
     waves = {
       { {19,3}, {10,1}, rate = 1200, cap = 30 },
@@ -26,7 +26,7 @@ return {
       { {42,2}, {66,3}, {93,1}, rate = 190, cap = 105 },
       { {42,2}, {93,1}, {66,3}, {74,2}, rate = 180, cap = 110 },
     } },
-  { id = 2, name = "Bosque de Kanto II", biome = 0, length = 600,
+  { id = 2, name = "Bosque Verde II", biome = 0, length = 600,
     bosses = { { dex = 143, at = 200 }, { dex = 15, at = 400 }, { dex = 22, at = 600 } },
     waves = {
       { {11,2}, {14,2}, {44,1}, {93,1}, rate = 180, cap = 110 },
@@ -50,7 +50,7 @@ return {
       { {104,2}, {48,1}, {96,2}, {44,1}, rate = 85, cap = 162 },
       { {104,2}, {48,1}, {96,2}, {46,1}, {44,1}, rate = 80, cap = 165 },
     } },
-  { id = 3, name = "Bosque de Kanto III", biome = 1, length = 600,
+  { id = 3, name = "Cueva Cristal I", biome = 1, length = 600,
     bosses = { { dex = 45, at = 200 }, { dex = 57, at = 400 }, { dex = 94, at = 600 } },
     waves = {
       { {12,1}, {47,1}, {49,1}, {104,1}, {109,1}, {81,1}, rate = 80, cap = 165 },
@@ -74,7 +74,7 @@ return {
       { {97,2}, {109,3}, {81,2}, {72,3}, {111,2}, rate = 65, cap = 125 },
       { {49,1}, {97,2}, {105,1}, {109,3}, {81,3}, {72,2}, {111,3}, rate = 60, cap = 130 },
     } },
-  { id = 4, name = "Bosque de Kanto IV", biome = 1, length = 600,
+  { id = 4, name = "Cueva Cristal II", biome = 1, length = 600,
     bosses = { { dex = 18, at = 150 }, { dex = 76, at = 300 }, { dex = 68, at = 450 }, { dex = 65, at = 600 } },
     waves = {
       { {65,2}, {101,1}, {97,2}, {110,1}, {82,1}, rate = 150, cap = 40 },
@@ -98,7 +98,7 @@ return {
       { {110,2}, {82,2}, {73,2}, {112,3}, {123,2}, {122,2}, {106,2}, {125,3}, rate = 65, cap = 80 },
       { {101,1}, {65,1}, {110,3}, {82,3}, {73,2}, {112,3}, {123,3}, {122,2}, {106,3}, {125,3}, rate = 60, cap = 85 },
     } },
-  { id = 5, name = "Costa de Kanto I", biome = 0, length = 600,
+  { id = 5, name = "Bosque Verde III", biome = 0, length = 600,
     bosses = { { dex = 59, at = 200 }, { dex = 38, at = 400 }, { dex = 71, at = 600 } },
     waves = {
       { {25,2}, {60,2}, {69,1}, rate = 1200, cap = 30 },
@@ -122,7 +122,7 @@ return {
       { {27,3}, {74,2}, {69,2}, rate = 190, cap = 105 },
       { {58,2}, {77,2}, {83,1}, {39,1}, {25,1}, rate = 180, cap = 110 },
     } },
-  { id = 6, name = "Costa de Kanto II", biome = 0, length = 600,
+  { id = 6, name = "Bosque Verde IV", biome = 0, length = 600,
     bosses = { { dex = 55, at = 200 }, { dex = 91, at = 400 }, { dex = 89, at = 600 } },
     waves = {
       { {54,2}, {86,2}, {90,1}, {60,1}, rate = 180, cap = 110 },
@@ -146,7 +146,7 @@ return {
       { {88,2}, {54,2}, {102,1}, {79,1}, rate = 85, cap = 162 },
       { {98,2}, {88,2}, {90,1}, {118,1}, {120,1}, rate = 80, cap = 165 },
     } },
-  { id = 7, name = "Costa de Kanto III", biome = 2, length = 600,
+  { id = 7, name = "Monte Ascuas I", biome = 2, length = 600,
     bosses = { { dex = 78, at = 200 }, { dex = 121, at = 400 }, { dex = 80, at = 600 } },
     waves = {
       { {93,2}, {66,2}, {25,1}, {98,1}, rate = 80, cap = 165 },
@@ -170,7 +170,7 @@ return {
       { {93,2}, {66,2}, {98,2}, {42,1}, {83,1}, rate = 65, cap = 125 },
       { {77,2}, {102,2}, {88,2}, {93,1}, {66,1}, {42,1}, rate = 60, cap = 130 },
     } },
-  { id = 8, name = "Costa de Kanto IV", biome = 2, length = 600,
+  { id = 8, name = "Monte Ascuas II", biome = 2, length = 600,
     bosses = { { dex = 62, at = 150 }, { dex = 143, at = 300 }, { dex = 94, at = 450 }, { dex = 131, at = 600 } },
     waves = {
       { {25,2}, {58,2}, {98,2}, {93,1}, {66,1}, rate = 150, cap = 40 },

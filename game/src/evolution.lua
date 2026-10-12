@@ -1,6 +1,6 @@
 -- evolution.lua — evolución del compañero DURANTE la partida (idea tomada de
--- Poké World Survivors): al nivel 16 pasa a su primera evolución y al 36 a la
--- segunda, con las cadenas de PokeAPI (data/evolutions.lua). Solo dura la run:
+-- Poké World Survivors): pasa a su primera y segunda evolución a sus niveles de los
+-- juegos, con las cadenas de PokeAPI (data/evolutions.lua). Solo dura la run:
 -- la colección no cambia. Las formas evolucionadas suben vida y ataque, cambian
 -- de tipos (y por tanto de movimientos ofrecidos) y permiten la evolución de
 -- movimientos con objeto (ver moves.evoInfo).
@@ -9,7 +9,16 @@ local E = {}
 G.Evolution = E
 
 local NEXT = require("data.evolutions")
-E.LEVELS = { 16, 36 }          -- nivel de la 1ª y 2ª evolución
+-- Cada Pokémon evoluciona a su NIVEL REAL (NEXT.LV, de PokeAPI: Charmeleon 16,
+-- Charizard 36, Croconaw 18...). Los que en los juegos evolucionan por piedra,
+-- intercambio o amistad usan estos niveles por defecto (1ª y 2ª evolución).
+E.LEVELS = { 22, 36 }
+E.MAX_FORMS = 2               -- evoluciones como mucho en una run
+
+-- Nivel al que `nxt` aparece al evolucionar desde la forma `form` (1 o 2).
+function E.levelFor(nxt, form)
+    return (NEXT.LV and NEXT.LV[nxt]) or E.LEVELS[form] or 36
+end
 
 -- Siguiente evolución con sprite disponible (en ramas como Eevee, la primera).
 function E.nextOf(dex)
@@ -42,6 +51,7 @@ function E.evolve(pl, nxt)
     pl.dex = nxt
     pl.form = (pl.form or 1) + 1
     pl._preloadEvo = false
+    pl._evoNext = nil                    -- se recalcula para la forma nueva
     -- Stats de la forma nueva: la vida extra se suma (y se recupera un cuarto).
     local dHp = mon.hp - old.hp
     pl.maxHp = pl.maxHp + dHp
@@ -60,17 +70,19 @@ function E.evolve(pl, nxt)
     G.Audio.sfx("legend")
     G.Spawner.say("¡" .. old.name .. " ha evolucionado a " .. mon.name .. "!", 3.4, true)
     G.Progress.event("evolvePokemon", { dex = nxt })
+    if G_SOAK then print(string.format("EVO %s -> %s al nivel %d (t=%d)", old.name, mon.name, pl.level, G.Game.time())) end
     return true
 end
 
 -- Llamar cada fotograma de juego: precarga la forma siguiente y evoluciona al nivel.
 function E.update(pl)
     pl.form = pl.form or 1
-    if pl.form > #E.LEVELS or pl.dead then return end
-    local lvl = E.LEVELS[pl.form]
-    if pl.level < lvl - 2 then return end
-    local nxt = E.nextOf(pl.dex)
+    if pl.form > E.MAX_FORMS or pl.dead then return end
+    local nxt = pl._evoNext
+    if nxt == nil then nxt = E.nextOf(pl.dex) or false; pl._evoNext = nxt end
     if not nxt then return end
+    local lvl = E.levelFor(nxt, pl.form)
+    if pl.level < lvl - 2 then return end
     if not pl._preloadEvo then
         pl._preloadEvo = true
         G.Sprites.preload({ nxt }, true)

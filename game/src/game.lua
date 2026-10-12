@@ -30,6 +30,17 @@ function Game.setState(s) state = s end
 -- ---------------- run ----------------
 
 -- @param stageIdx  nil = arena infinita; número = fase del modo Fases
+-- Nombre de la zona en la arena infinita, numerado según las veces que has
+-- entrado en ese bioma en esta partida: MONTE ASCUAS I, II, III...
+local ROMAN = { "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X" }
+local zoneVisits = {}
+local function zoneName()
+    local b = G.World.biome()                  -- el bioma real (se repiten en ciclo)
+    zoneVisits[b] = (zoneVisits[b] or 0) + 1
+    local n = zoneVisits[b]
+    return G.World.biomeName() .. " " .. (ROMAN[n] or tostring(n))
+end
+
 function Game.startRun(stageIdx)
     local save = G.DB.save
     local mon = G.DEX_BY[save.partner]
@@ -74,7 +85,17 @@ function Game.startRun(stageIdx)
     deathT = 0
     state = "playing"
     G.UI.show("hud")
-    G.Spawner.sayZone(stage and stage.name or G.World.biomeName())
+    zoneVisits = {}
+    G.Spawner.sayZone(stage and stage.name or zoneName())
+    -- En las fases avanzadas empiezas con algunas subidas de nivel (eliges sus
+    -- cartas al empezar), para no llegar a nivel 1 contra enemigos de tramo alto.
+    if stageIdx and stageIdx > 1 then
+        for _ = 1, stageIdx - 1 do
+            pl.level = pl.level + 1
+            pendingLevels = pendingLevels + 1
+        end
+        pl.xpNext = G.Player.xpFor(pl.level)
+    end
 end
 
 function Game.quitRun()
@@ -139,7 +160,8 @@ function Game.endRun(dead, won)
     save.stats.playTime = (save.stats.playTime or 0) + time
     local sum = 0
     for _, p in ipairs(parts) do sum = sum + p[2] end
-    local coins = U.round(sum * mul)
+    local dif = G.Difficulty.get()
+    local coins = U.round(sum * mul * dif.reward)
     local record = time > (save.stats.bestTime or 0)
 
     save.coins = save.coins + coins
@@ -159,6 +181,7 @@ function Game.endRun(dead, won)
     for _, p in ipairs(parts) do if p[2] > 0 then breakdown[#breakdown + 1] = p[1] .. " " .. p[2] end end
     local bd = table.concat(breakdown, " · ")
     if mul > 1 then bd = bd .. string.format(" · x%.2f Fortuna", mul) end
+    if dif.reward ~= 1 then bd = bd .. string.format(" · x%.2f %s", dif.reward, dif.name) end
 
     local stage = G.Stages.current()
     G.RunUI.showOver({
@@ -319,7 +342,7 @@ local function update(dt)
         biome = b
         G.World.setBiome(b)
         G.Audio.sfx("biome")
-        G.Spawner.sayZone(G.World.biomeName())
+        G.Spawner.sayZone(zoneName())
         G.FX.ring(pl.x, pl.y, 10, G.Camera.outerRadius(), "#ffffff", 0.7, 6)
     end
 

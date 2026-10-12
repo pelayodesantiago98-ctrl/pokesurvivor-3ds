@@ -134,7 +134,7 @@ function S.update(dt, pl, t)
     -- Combate de jefe: las oleadas bajan al 25% y no hay mareas.
     local bossFight = G.EnemyMgr.bossAlive()
     local cap = stage and G.Stages.cap(t) or S.CAP
-    local rate = stage and G.Stages.rate(t) or S.rate(t)
+    local rate = (stage and G.Stages.rate(t) or S.rate(t)) * G.Difficulty.get().rate
 
     -- Goteo normal
     if G.EnemyMgr.count() < cap then

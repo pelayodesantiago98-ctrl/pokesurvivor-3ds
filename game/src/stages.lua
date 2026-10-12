@@ -35,15 +35,16 @@ local function waveAt(t)
 end
 
 -- Tramo de stats (1..6) según la oleada: cada 4 oleadas sube uno; las fases
--- avanzadas empiezan más arriba.
+-- avanzadas empiezan más arriba (uno más cada 3 fases: con uno cada 2, la fase 7
+-- arrancaba en el tramo 4 y te tumbaban a los 10 s a nivel 1).
 local function tierFor(w)
-    local base = math.floor((cur.idx - 1) / 2)
+    local base = math.floor((cur.idx - 1) / 3)
     return math.min(#G.Enemies.TIERS, base + math.floor((w - 1) / 4) + 1)
 end
 
 -- Multiplicadores de dificultad de la fase (vida / daño de los enemigos).
 local function hpMul() return 1 + 0.25 * (cur.idx - 1) end
-local function dmgMul() return 1 + 0.10 * (cur.idx - 1) end
+local function dmgMul() return 1 + 0.06 * (cur.idx - 1) end
 
 -- Bolsa de definiciones de enemigo de la oleada actual (cacheada por oleada).
 function S.bagAt(t)

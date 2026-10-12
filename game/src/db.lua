@@ -105,6 +105,9 @@ function DB.commit()
     s.updated = now()
     local ok, text = pcall(G.JSON.encode, s)
     if not ok then print("[DB] no se pudo codificar la partida: " .. tostring(text)) return false end
+    -- Las pruebas aceleradas (--soak) no tocan la partida guardada de verdad: sus
+    -- opciones (--difficulty, --partner...) y resultados se quedan en memoria.
+    if G_SOAK then return true end
     local ok2, err = love.filesystem.write(FILE, text)
     if not ok2 then print("[DB] no se pudo escribir " .. FILE .. ": " .. tostring(err)) return false end
     return true

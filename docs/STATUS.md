@@ -31,6 +31,29 @@ GitHub (y `receive.denyCurrentBranch=updateInstead` actualiza su copia). git por
   Pokémon que tienes. `--card=fondo,entrenador`, `--medals=N` (no se guardan).
 - NO se usa nada de Pokécharms (sus normas lo prohíben); se retiró.
 
+**NOVEDAD 5 (2026-10-12, pruebas aceleradas y equilibrio):**
+- Pruebas: `tools\soak-test.ps1 -Seconds N -GameArgs "..." -Tag x` (varias en paralelo con
+  -Tag). Opciones: `--mortal` (puedes morir: vuelve al menú y empieza otra), `--partner=N`,
+  `--difficulty=easy|normal|hard|extreme`, `--stage=N`, `--killbosses`, `--level=N`,
+  `--time=N`. Detecta atascos (SOAK_STUCK) y cuelgues (TIMEOUT); imprime nivel, forma,
+  derrotados, paso máximo y memoria; `MUERTE` con el último golpe y `EVO` al evolucionar.
+  En modo prueba NO se escribe save.json.
+- Arreglado: `Sprites.gc` tomaba el conjunto {dex=true} por lista si contenía los dex 1 y 2
+  (Bulbasaur/Ivysaur) → cierre "table index is nil" y hojas soltadas de más.
+- Dificultad (`src/difficulty.lua`, botón en la barra del menú, L/R): Fácil / Medio /
+  Difícil / Extremo multiplican vida y daño enemigos, ritmo de aparición y monedas.
+- Evolución a los niveles reales de cada especie (`data/evolutions.lua` con `M.LV`, de
+  PokeAPI); piedra/intercambio/amistad: 22 y 36. Curva de exp más plana (nivel 16 con
+  ~3.000 de exp, 36 con ~16.000).
+- Fases: nombres Bosque Verde I-IV, Cueva Cristal I-II, Monte Ascuas I-II; el volcán y la
+  arena de fuego se llaman Monte Ascuas; en la arena infinita las zonas se numeran
+  (MONTE ASCUAS II...). Fases avanzadas: tramo de enemigos +1 cada 3 fases, daño +6 %
+  por fase y subidas de nivel gratis al empezar (fase N: N-1).
+- Resultado de la batería: 0 errores, 0 atascos, 0 cuelgues en 25+ escenarios (arena
+  30 min, modo mortal, las 8 fases, nivel 50, las 4 dificultades, Fuego/Agua/Volador en
+  agua y lava). Memoria estable (sube a ~35 MB y el GC la baja). Paso máximo ~25 ms en
+  PC; 76 ms sólo al saltar a nivel 50 / minuto 20 de golpe (no pasa jugando).
+
 **Pendiente para la siguiente sesión:**
 - Reconstruir el CIA (`tools\build.ps1 -Target cia`), subirlo por FTP (192.168.1.34:5000,
   /CIAS/) y probar en la consola: rendimiento de la lava animada, memoria de la tarjeta.
