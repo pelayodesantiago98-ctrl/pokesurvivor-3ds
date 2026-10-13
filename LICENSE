@@ -1,0 +1,56 @@
+PokéSurvivor 3DS — licencias
+
+Port a Nintendo 3DS (LÖVE Potion) del juego web PokéSurvivor de JPTER78
+(https://github.com/JPTER78/pokesurvivor · https://pokesurvivor.com).
+Proyecto de fans sin ánimo de lucro.
+
+1) CÓDIGO
+
+El código Lua de este port es una traducción y adaptación del código de
+PokéSurvivor, publicado bajo licencia MIT. Se reproduce su aviso:
+
+MIT License
+
+Copyright (c) 2026 JPTER78
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Algunas mecánicas (evolución en partida, modo Fases, decoración de ruta) se
+basan en Poké World Survivors de giovanneluna
+(https://github.com/giovanneluna/poke-survivors), también bajo licencia MIT
+(Copyright (c) giovanneluna; mismo texto de permiso que arriba).
+
+El código nuevo de este port se publica en las mismas condiciones (MIT).
+
+2) CONTENIDO DE TERCEROS (NO cubierto por la licencia MIT)
+
+- Sprites de los Pokémon (game/img/pkmn): SpriteCollab
+  (https://github.com/PMDCollab/SpriteCollab), licencia CC BY-NC 4.0: uso NO
+  comercial y con atribución; los artistas están en CREDITS.md.
+- Suelo, hierba, flores, árboles y rocas del mapa: tileset de HeartGold/SoulSilver
+  de SirMaio, versión de jls-dchrn/HGSS_pokemon_tileset.
+- Sprites de entrenadores (tarjeta): colección de Pokémon Showdown; sprites de
+  Negro/Blanco y de objetos: PokeAPI/sprites; datos: PokeAPI (https://pokeapi.co/).
+- Música y efectos: generados para este port (tools/gen_audio.py).
+
+3) MARCAS
+
+Pokémon y todos los nombres y personajes relacionados son marcas y propiedad
+de Nintendo, Creatures Inc., GAME FREAK y The Pokémon Company. Este es un
+proyecto de fans sin ánimo de lucro, no afiliado ni aprobado por ellos.
