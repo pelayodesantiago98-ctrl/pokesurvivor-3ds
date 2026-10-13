@@ -1,7 +1,26 @@
 ﻿# PokéSurvivor 3DS
 
-Survivor fan-made (estilo pokesurvivor.com) para Nintendo 3DS, escrito en Lua con
+Port no oficial de [PokéSurvivor](https://github.com/JPTER78/pokesurvivor) (de JPTER78,
+[pokesurvivor.com](https://pokesurvivor.com)) para Nintendo 3DS, escrito en Lua con
 [LÖVE Potion](https://github.com/lovebrew/lovepotion) y empaquetado como `.3dsx` y `.cia`.
+Usa las dos pantallas: arriba la partida y abajo un menú táctil al estilo de los juegos de DS.
+Proyecto de fans sin ánimo de lucro; licencias y créditos en [LICENSE](LICENSE) y
+[CREDITS.md](CREDITS.md).
+
+## Capturas
+
+Cada captura muestra las dos pantallas de la consola (arriba 400×240, abajo 320×240).
+
+| | |
+|:---:|:---:|
+| ![Menú principal](docs/capturas/menu.png) | ![Partida](docs/capturas/partida.png) |
+| Menú principal | Partida |
+| ![Agua con reflejos](docs/capturas/agua.png) | ![Mar de lava](docs/capturas/lava.png) |
+| Agua con reflejos | Mar de lava animado |
+| ![Subida de nivel](docs/capturas/mejoras.png) | ![Pokédex](docs/capturas/pokedex.png) |
+| Subida de nivel (repetir y vetar) | Pokédex |
+| ![Tarjeta de entrenador](docs/capturas/tarjeta.png) | |
+| Tarjeta de entrenador | |
 
 ## Estructura
 
