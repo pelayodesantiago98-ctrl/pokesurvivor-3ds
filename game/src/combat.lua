@@ -55,10 +55,15 @@ end
 -- Tabla de tipos × clima para un ataque de tipo `type` contra `e`.
 local function typeK(ty, e) return G.Types.mult(ty, e.types) * G.Weather.mult(ty) end
 
+-- Golpe crítico (Mejoras > Golpe Crítico): x1,5 de daño, número naranja y grande.
+local CRIT_MUL = 1.5
+local function isCrit(pl) return (pl.critChance or 0) > 0 and random() < pl.critChance end
+
 local function hit(pl, e, dmg, col, dx, dy, knock, m)
     local k = typeK(m.type, e)
-    dmg = dmg * k
-    e:hurt(dmg, col, dx, dy, knock, G.Types.label(G.Types.mult(m.type, e.types)))
+    local crit = isCrit(pl)
+    dmg = dmg * k * (crit and CRIT_MUL or 1)
+    e:hurt(dmg, col, dx, dy, knock, crit and 'crit' or G.Types.label(G.Types.mult(m.type, e.types)))
     pl:onDealt(dmg)
     pl.dmgDealt = pl.dmgDealt + dmg
     if m.burn and m.burn > 0 then e:applyBurn(m.burn) end
@@ -691,9 +696,10 @@ function C.resolve(dt, pl, now)
                             if p.hits[e.id] then skip = true else p.hits[e.id] = true end
                         end
                         if not skip then
-                            local k = p.mtype and typeK(p.mtype, e) or 1
+                            local crit = isCrit(pl)
+                            local k = (p.mtype and typeK(p.mtype, e) or 1) * (crit and CRIT_MUL or 1)
                             e:hurt(p.dmg * k, p.color, (p.vx ~= 0 and p.vx or (e.x - pl.x)), (p.vy ~= 0 and p.vy or (e.y - pl.y)), p.knock,
-                                   p.mtype and G.Types.label(G.Types.mult(p.mtype, e.types)) or nil)
+                                   crit and 'crit' or (p.mtype and G.Types.label(G.Types.mult(p.mtype, e.types)) or nil))
                             if random() < 0.5 then G.FX.sp('impact', p.vis and p.vis.pal or 'normal', e.x, e.y - e.bodyH * 0.5, impactOpts) end
                             pl.dmgDealt = pl.dmgDealt + p.dmg * k
                             pl:onDealt(p.dmg * k)

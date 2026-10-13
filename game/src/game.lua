@@ -37,10 +37,13 @@ function Game.setState(s) state = s end
 local ROMAN = { "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X" }
 local zoneVisits = {}
 local function zoneName()
-    local b = G.World.biome()                  -- el bioma real (se repiten en ciclo)
-    zoneVisits[b] = (zoneVisits[b] or 0) + 1
-    local n = zoneVisits[b]
-    return G.World.biomeName() .. " " .. (ROMAN[n] or tostring(n))
+    -- El ciclo de biomas también pasa por los temas de las arenas, cuyo nombre lleva
+    -- "Grieta · " delante: fuera de una grieta se quita. Se cuenta por nombre, así la
+    -- zona de fuego del volcán y la de la arena de fuego siguen la misma numeración.
+    local name = G.World.biomeName():gsub("^Grieta · ", "")
+    zoneVisits[name] = (zoneVisits[name] or 0) + 1
+    local n = zoneVisits[name]
+    return name .. " " .. (ROMAN[n] or tostring(n))
 end
 
 function Game.startRun(stageIdx)
@@ -56,6 +59,7 @@ function Game.startRun(stageIdx)
     G.EnemyMgr.clear()
     G.Pickups.clear()
     G.Rift.reset()
+    G.Judgment.reset()
     G.Events.reset()
     G.Weather.reset()
     G.Path.clear()
@@ -69,12 +73,27 @@ function Game.startRun(stageIdx)
     pl = G.Player.new(mon, perks, save.partnerShiny and G.DB.ownsShiny(mon.dex))
     banked1, banked10 = 0, 0
     caught = {}
+    -- Atajos (Mejoras): movimientos con hueco fijo (save.pbind[dex] = { [hueco] = id }),
+    -- antes de aprender nada: addMove ya los coloca.
+    local binds = save.pbind and save.pbind[mon.dex]
+    if type(binds) == "table" then
+        for i = 1, 4 do
+            local id = binds[i]
+            if type(id) == "string" and G.Moves.BY_ID[id] then pl.bind[id] = i end
+        end
+    end
+    -- Mejora "Veto": movimientos elegidos en Mejoras que no salen en las cartas
+    -- (van con las cartas vetadas en la run: clave 'new:<id>').
+    local bans = save.pban and save.pban[mon.dex]
+    if type(bans) == "table" then
+        for i = 1, math.min(#bans, perks.bans or 0) do pl.banned["new:" .. bans[i]] = true end
+    end
     pl:addMove(G.startMoveOf(mon.dex))
     -- Mejora "Repertorio": un segundo movimiento de ataque al azar.
     if perks.startMoves >= 2 then
         local pool = {}
         for _, id in ipairs(G.Moves.poolFor(mon)) do
-            if not pl:hasMove(id) and G.Moves.BY_ID[id].kind ~= "buff" then pool[#pool + 1] = id end
+            if not pl:hasMove(id) and not pl.banned["new:" .. id] and G.Moves.BY_ID[id].kind ~= "buff" then pool[#pool + 1] = id end
         end
         if #pool > 0 then pl:addMove(U.pick(pool)) end
         pl:setActive(1)
@@ -191,6 +210,10 @@ function Game.endRun(dead, won)
     save.stats.bestTime = math.max(save.stats.bestTime or 0, math.floor(time))
     save.stats.bestLevel = math.max(save.stats.bestLevel or 0, pl.level)
     save.stats.coinsEarned = (save.stats.coinsEarned or 0) + coins
+    -- La Sentencia de Arceus: lo aguantado ante él (logros) y fin.
+    local judge = G.Judgment.summary()
+    if judge then G.Progress.event("judgeEnd", judge) end
+    G.Judgment.reset()
     G.Progress.event("runEnd", { time = time, level = pl.level, coins = pl.coins, types = pl.mon.types })
     G.Progress.checkAch()
     G.DB.commit()
@@ -205,7 +228,7 @@ function Game.endRun(dead, won)
     G.RunUI.showOver({
         dead = dead, won = won, stage = stage and stage.name or nil, time = time, level = pl.level, kills = pl.kills,
         bosses = pl.bosses, coins = coins, record = record and not stage, t1 = pl.t1, t10 = pl.t10, moves = pl.moves,
-        caught = caught, breakdown = bd, form = pl.form or 1, name = pl.mon.name,
+        caught = caught, breakdown = bd, form = pl.form or 1, name = pl.mon.name, judge = judge,
     }, function() pl = nil; G.Flow.afterRun() end)
 end
 
@@ -342,6 +365,11 @@ end
 
 local function handleButtons()
     local In = G.Input
+    -- La Sentencia de Arceus: A, B o START saltan la animación (si se puede).
+    if state == "playing" and pl and G.Judgment.cinematic() then
+        if In.pressed("a") or In.pressed("b") or In.pressed("start") then G.Judgment.skip() end
+        return
+    end
     if state == "playing" and pl then
         if In.pressed("start") then Game.togglePause() return end
         if In.pressed("leftshoulder") then pl:cycle(-1) end
@@ -356,6 +384,16 @@ end
 
 local function update(dt)
     if flashT > 0 then flashT = flashT - dt end
+    -- La Sentencia de Arceus: mientras dura la animación, todo lo demás se para
+    -- (también el reloj).
+    if G.Judgment.cinematic() then
+        G.Judgment.cineTick(dt)
+        pl.anim:update(dt)
+        G.World.update(dt, G.Camera)
+        G.FX.update(dt)
+        G.Audio.music(G.Judgment.music())
+        return
+    end
     -- Tras caer, deja que se vea la animación de Faint antes del resumen.
     -- (En la arena de la grieta no: allí caer solo te echa de vuelta.)
     if pl.dead and not G.Rift.inArena() then
@@ -376,7 +414,7 @@ local function update(dt)
     local nb = G.Tiles.ARENA + #G.Tiles.ARENA_TYPES
     local b = math.floor(time / 240) % nb
     if G.Stages.active() then b = biome end     -- en una fase el bioma es fijo
-    if b ~= biome and not G.Rift.inArena() then
+    if b ~= biome and not G.Rift.inArena() and not G.Judgment.active() then
         biome = b
         G.World.setBiome(b)
         G.Audio.sfx("biome")
@@ -402,11 +440,13 @@ local function update(dt)
     G.Hazards.update(dt)
     G.Interact.update(dt, pl)
     G.Rift.update(dt, pl, time)
+    G.Judgment.update(dt, pl, time)
     G.Events.update(dt, pl, time)
     G.Weather.update(dt, time, pl)
     G.FX.update(dt)
 
-    G.Audio.music(G.Rift.inArena() and "rift" or (G.EnemyMgr.bossAlive() and "boss" or G.BIOME_MUSIC[(biome % #G.BIOME_MUSIC) + 1]))
+    if G.Judgment.active() then G.Audio.music(G.Judgment.music())
+    else G.Audio.music(G.Rift.inArena() and "rift" or (G.EnemyMgr.bossAlive() and "boss" or G.BIOME_MUSIC[(biome % #G.BIOME_MUSIC) + 1])) end
     -- `--killbosses` (depuración): los jefes caen al instante.
     if Game.autoKillBosses then
         local all = G.EnemyMgr.all()
@@ -482,6 +522,13 @@ local function drawScene(cam, extra)
         it.y = rift.y; it.ent = rift; it.prop = nil
         items[n] = it
     end
+    local arceus = (pl and state ~= "ui") and G.Judgment.drawable() or nil
+    if arceus then
+        n = n + 1
+        local it = items[n] or {}
+        it.y = arceus.y; it.ent = arceus; it.prop = nil
+        items[n] = it
+    end
     if pl and state ~= "ui" then
         local evs = G.Events.drawables()
         for i = 1, #evs do
@@ -518,6 +565,7 @@ function Game.render()
         G.Projectiles.draw()
         G.Combat.drawAirFields()
         G.FX.draw()
+        G.Judgment.drawAir()
         G.Camera.unapply()
         G.Weather.draw(400, 240, frameDt)
         G.World.drawVignette(400, 240)
@@ -688,7 +736,7 @@ function Game.autoplay(dt)
     if scr == "cards" then G.UI.pressButton("a")
     elseif scr == "pause" then Game.togglePause()
     elseif state == "playing" and pl and pl.bonds > 0 then Game.offerBond(true)
-    elseif state == "playing" and G.Burst.ready(pl) then G.Burst.fire(pl) end
+    elseif state == "playing" and not G.Judgment.cinematic() and G.Burst.ready(pl) then G.Burst.fire(pl) end
 end
 
 -- Depuración: fuerza una subida de nivel o la caída del jugador.

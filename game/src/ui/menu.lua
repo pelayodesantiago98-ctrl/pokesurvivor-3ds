@@ -320,29 +320,39 @@ function upg.draw()
     UI.text(mon.name .. (upgDex == s.partner and " (compañero)" or ""), 28, 7, { size = 12, w = 180, align = "center" })
     UI.button("nextmon", 210, 4, 22, 18, ">", { size = 10 })
     UI.text(s.coins .. " monedas", 236, 7, { size = 10, color = UI.C.gold, w = 80, align = "right" })
+    -- (13 mejoras: filas de 15 px para que quepan todas.)
     for i, u in ipairs(G.Upgrades.LIST) do
-        local y = 26 + (i - 1) * 19
+        local y = 25 + (i - 1) * 15
         local lvl = levels[u.id] or 0
         local maxed = lvl >= u.max
         local cost = maxed and 0 or G.Upgrades.cost(u.id, lvl)
-        G.Icons.draw(u.icon, 6, y + 2, 14)
-        UI.text(u.name, 24, y + 2, { size = 10 })
-        UI.text(u.unit, 90, y + 2, { size = 10, color = UI.C.muted })
+        G.Icons.draw(u.icon, 6, y, 12)
+        UI.text(u.name, 22, y + 1, { size = 10 })
+        if u.id == "ban" and lvl > 0 then
+            -- Veto: elegir los movimientos vetados (pantalla "upgmoves").
+            local n = #(G.MenuUI.banList(upgDex))
+            UI.button("pickban", 88, y, 104, 14, "Elegir (" .. math.min(n, lvl) .. "/" .. lvl .. ")", { size = 10, color = "#d04848" })
+        else
+            UI.text(u.unit, 90, y + 1, { size = 10, color = UI.C.muted })
+        end
         for k = 1, u.max do
             U.setColor(k <= lvl and UI.C.gold or "#2a3350")
-            lg.rectangle("fill", 196 + (k - 1) * 6, y + 5, 4, 8)
+            lg.rectangle("fill", 196 + (k - 1) * 6, y + 3, 4, 8)
         end
         lg.setColor(1, 1, 1, 1)
         local can = not maxed and s.coins >= cost
-        UI.button("buy" .. i, 262, y, 54, 16, maxed and "Máx." or tostring(cost), { size = 10, color = can and "#2a2410" or nil, enabled = can,
+        UI.button("buy" .. i, 262, y, 54, 14, maxed and "Máx." or tostring(cost), { size = 10, color = can and "#2a2410" or nil, enabled = can,
                   textColor = can and UI.C.gold or nil })
     end
-    UI.button("back", 110, 218, 100, 18, "Volver", { size = 10 })
+    UI.button("back", 56, 222, 100, 16, "Volver", { size = 10 })
+    UI.button("binds", 164, 222, 100, 16, "Atajos", { size = 10, color = "#3c8c5a" })
 end
 function upg.touch(x, y)
     local id = UI.hit(x, y)
     if not id then return end
     if id == "back" then UI.show("menu") return end
+    if id == "pickban" then UI.show("upgmoves", { dex = upgDex, mode = "ban" }) return end
+    if id == "binds" then UI.show("upgmoves", { dex = upgDex, mode = "bind" }) return end
     local k = U.indexOf(upgList, upgDex) or 1
     if id == "prevmon" then upgDex = upgList[(k - 2) % #upgList + 1]; upg.enter() return end
     if id == "nextmon" then upgDex = upgList[k % #upgList + 1]; upg.enter() return end
@@ -361,6 +371,125 @@ function upg.button(b)
     elseif b == "rightshoulder" then upg.touch(211, 5) end
 end
 UI.register("upgrades", upg)
+
+-- ---------------- mejoras: veto y atajos de movimientos ----------------
+-- Veto: save.pban[dex] = { id, ... } (tantos como niveles de Veto; el de inicio
+-- no se puede vetar). Atajos: save.pbind[dex] = { [hueco 1-4] = id }: ese
+-- movimiento va siempre en ese hueco (ver Player:arrange).
+function M.banList(dex)
+    local s = G.DB.save
+    s.pban = s.pban or {}
+    local l = s.pban[dex]
+    if type(l) ~= "table" then l = {}; s.pban[dex] = l end
+    return l
+end
+local function bindList(dex)
+    local s = G.DB.save
+    s.pbind = s.pbind or {}
+    local l = s.pbind[dex]
+    if type(l) ~= "table" then l = {}; s.pbind[dex] = l end
+    return l
+end
+
+local um = {}
+local umDex, umMode, umIds, umPage, umSlot = nil, "ban", {}, 1, 1
+local UM_PER = 14                 -- 2 columnas x 7 filas
+function um.enter(d)
+    d = d or {}                     -- (`--ui=upgmoves`: atajos del compañero)
+    umDex, umMode = d.dex or G.DB.save.partner, d.mode or "bind"
+    umPage, umSlot = 1, 1
+    local mon = G.DEX_BY[umDex]
+    local start = G.startMoveOf(umDex)
+    umIds = {}
+    local seen = {}
+    for _, id in ipairs(G.Moves.poolFor(mon)) do
+        if not seen[id] and (umMode == "bind" or id ~= start) then umIds[#umIds + 1] = id; seen[id] = true end
+    end
+    if umMode == "bind" and not seen[start] then umIds[#umIds + 1] = start end
+    table.sort(umIds, function(a, b) return G.Moves.BY_ID[a].name < G.Moves.BY_ID[b].name end)
+    G.TopUI.overlay = function()
+        G.TopUI.pokemonCard(umDex, { footer = umMode == "ban"
+            and "Los movimientos vetados no te salen nunca en las cartas"
+            or "Cada movimiento con atajo va siempre en su hueco (1-4)" })
+    end
+end
+function um.draw()
+    local mon = G.DEX_BY[umDex]
+    local y0 = 26
+    if umMode == "ban" then
+        local max = G.DB.upgradesOf(umDex).ban or 0
+        UI.text("Veto · " .. mon.name .. " (" .. #M.banList(umDex) .. "/" .. max .. ")", 0, 7, { size = 12, w = W, align = "center", color = UI.C.gold })
+    else
+        UI.text("Atajos · " .. mon.name, 0, 4, { size = 12, w = W, align = "center", color = UI.C.gold })
+        local binds = bindList(umDex)
+        for i = 1, 4 do
+            local id = binds[i]
+            local name = (id and G.Moves.BY_ID[id]) and G.Moves.BY_ID[id].name or "Libre"
+            UI.button("slot" .. i, 4 + (i - 1) * 79, 20, 75, 18, i .. ": " .. name, { size = 10, on = umSlot == i, color = "#3c6cc4" })
+        end
+        y0 = 46
+    end
+    local pages = math.max(1, math.ceil(#umIds / UM_PER))
+    if umPage > pages then umPage = pages end
+    local bans, binds = M.banList(umDex), bindList(umDex)
+    for k = 1, UM_PER do
+        local idx = (umPage - 1) * UM_PER + k
+        local id = umIds[idx]
+        if not id then break end
+        local m = G.Moves.BY_ID[id]
+        local col, row = (k - 1) % 2, math.floor((k - 1) / 2)
+        local x, y = 4 + col * 158, y0 + row * 23
+        local on, label = false, m.name
+        if umMode == "ban" then
+            on = U.contains(bans, id)
+            if on then label = "X " .. m.name end
+        else
+            for i = 1, 4 do if binds[i] == id then label = i .. " · " .. m.name; on = i == umSlot end end
+        end
+        UI.button("mv" .. idx, x, y, 154, 20, label, { size = 10, icon = "move:" .. id, on = on,
+                  color = (umMode == "ban" and on) and "#d04848" or U.TYPE_COLOR[m.type] })
+    end
+    if pages > 1 then
+        UI.button("pprev", 4, 218, 40, 18, "<", { size = 10, enabled = umPage > 1 })
+        UI.text(umPage .. "/" .. pages, 46, 222, { size = 10, w = 40, align = "center" })
+        UI.button("pnext", 88, 218, 40, 18, ">", { size = 10, enabled = umPage < pages })
+    end
+    UI.button("back", 200, 218, 116, 18, "Volver", { size = 10 })
+end
+function um.touch(x, y)
+    local id = UI.hit(x, y)
+    if not id then return end
+    if id == "back" then UI.show("upgrades") return end
+    if id == "pprev" then umPage = math.max(1, umPage - 1) return end
+    if id == "pnext" then umPage = umPage + 1 return end
+    local s = tonumber(id:match("^slot(%d)$"))
+    if s then umSlot = s; G.Audio.sfx("click") return end
+    local idx = tonumber(id:match("^mv(%d+)$"))
+    local mid = idx and umIds[idx]
+    if not mid then return end
+    if umMode == "ban" then
+        local l = M.banList(umDex)
+        local i = U.indexOf(l, mid)
+        local max = G.DB.upgradesOf(umDex).ban or 0
+        if i then table.remove(l, i)
+        elseif #l >= max then UI.toast("Ya tienes " .. max .. " vetados: quita uno primero") return
+        else l[#l + 1] = mid end
+    else
+        -- Un movimiento sólo puede estar en un hueco; tocar el del hueco lo deja libre.
+        local l = bindList(umDex)
+        local was = l[umSlot]
+        for i = 1, 4 do if l[i] == mid then l[i] = nil end end
+        if was ~= mid then l[umSlot] = mid end
+    end
+    G.DB.commit()
+    G.Audio.sfx("select")
+end
+function um.button(b)
+    if b == "b" then UI.show("upgrades")
+    elseif b == "leftshoulder" then umPage = math.max(1, umPage - 1)
+    elseif b == "rightshoulder" then umPage = umPage + 1 end
+end
+UI.register("upgmoves", um)
 
 -- ---------------- gacha ----------------
 local gacha = {}

@@ -36,6 +36,8 @@ end
 
 local function drawRun(pl)
     local st = G.Game.state()
+    -- La Sentencia de Arceus: durante la animación sólo se ve ella.
+    if G.Judgment.cinematic() then G.Judgment.drawHud(W, H, pl, nil) lg.setColor(1, 1, 1, 1) return end
     -- Barra de experiencia (borde superior)
     local xpF = pl.xp / pl.xpNext
     lg.setColor(0, 0, 0, 0.5)
@@ -114,6 +116,9 @@ local function drawRun(pl)
         U.setColor("#d9c2ff")
         lg.printf("GRIETA · " .. U.mmss(G.Rift.timeLeft and G.Rift.timeLeft() or 0), 0, boss and 58 or 40, W, "center")
     end
+
+    -- La Sentencia de Arceus: ceniza, contador y flecha hacia él.
+    if G.Judgment.active() then G.Judgment.drawHud(W, H, pl, boss) end
 
     -- Eventos (cuenta atrás, flechas)
     if G.Events.drawHud then G.Events.drawHud(W, H, pl) end

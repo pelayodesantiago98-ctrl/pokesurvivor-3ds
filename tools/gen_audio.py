@@ -556,6 +556,29 @@ MUSIC = {
         ],
         "drums": {"kick": "X.x.X.x.X.x.X.xx", "snare": "....X.......X..X", "hat": "xoxoxoxoxoxoxoxo"},
     },
+    # La Sentencia de Arceus (minuto 30). Solemne y sin salida: Re menor con un
+    # Mi bemol (frigio) que oscurece, campanas graves en cada compás y la
+    # melodía subiendo hasta el final.
+    "judgment": {
+        "bpm": 140,
+        "chords": ["Dm", "Bb", "Gm", "A", "Dm", "Eb", "C", "A",
+                   "Bb", "C", "Dm", "Dm", "Gm", "A", "Dm", "A"],
+        "melody": [{"inst": "lead", "vel": 1, "bars": [
+            "D5:4 F5:4 A5:6 G5:2", "F5:4 D5:4 Bb4:8",
+            "G5:4 Bb5:4 D6:4 C6:2 Bb5:2", "A5:8 C#6:4 E6:4",
+            "D6:6 C6:2 A5:4 F5:4", "G5:4 Eb5:4 G5:4 Bb5:4",
+            "C6:4 E5:2 G5:2 C6:4 E6:4", "C#6:12 -:4",
+            "D6:2 D6:2 F6:4 D6:4 Bb5:4", "C6:2 C6:2 E6:4 C6:4 G5:4",
+            "A5:4 D6:4 F6:4 E6:2 D6:2", "D6:12 -:4",
+            "Bb5:4 D6:4 G6:4 F6:2 D6:2", "E6:4 C#6:4 A5:4 E6:4",
+            "F6:4 E6:2 D6:2 A5:4 F5:4", "E5:4 A5:4 C#6:4 E6:4"]}],
+        "parts": [
+            {"inst": "bass", "octave": 2, "vel": 1, "pattern": "R.RRR.RRR.RRF.OF"},
+            {"inst": "bell", "octave": 4, "vel": 0.6, "pattern": "0.......2......."},
+            {"inst": "pad", "octave": 3, "vel": 0.8, "pattern": "C---------------"},
+        ],
+        "drums": {"kick": "X..xX..xX..xX.xx", "snare": "....X.......X..X", "hat": "x.x.x.x.x.x.x.x."},
+    },
 }
 
 
@@ -798,6 +821,40 @@ def sfx_xp(s, combo):
     s.tone("sine", 880 * 2 ** (combo / 12.0), 0, 0.06, 0.035)
 
 
+# ---- La Sentencia de Arceus (src/judgment.lua) ----
+def sfx_quake(s):
+    s.hiss(2.4, 0.18, "lowpass", 320, 50)
+    s.tone("sine", 52, 30, 2.2, 0.22)
+
+
+def sfx_toll(s):
+    for i, f in enumerate([110, 165, 220, 330]):
+        s.inst(i_bell, 0, f, 1.4, 1.5 - i * 0.3)
+    s.inst(i_pad, 0, 55, 2.4, 2.6)
+    s.inst(i_pad, 0, 82.4, 2.4, 2)
+    s.tone("sine", 55, 52, 2.4, 0.16)
+
+
+def sfx_descend(s):
+    s.hiss(2.4, 0.07, "bandpass", 300, 3200, 0, 0.7)
+    for i, f in enumerate([262, 330, 392, 523, 659]):
+        s.inst(i_pad, i * 0.3, f, 2.2, 1.6)
+
+
+def sfx_land(s):
+    s.hiss(1.6, 0.32, "lowpass", 2400, 50)
+    s.tone("sine", 95, 26, 1.4, 0.36)
+    s.inst(i_kick, 0, 1.6)
+    s.inst(i_kick, 0.12, 1.1)
+    s.arp("square", [523, 659, 784, 1047, 1319], 0.07, 0.6, 0.045)
+
+
+def sfx_judge(s):
+    s.tone("sine", 1760, 700, 0.45, 0.04)
+    s.hiss(0.35, 0.07, "highpass", 1800, 6000)
+    s.tone("triangle", 120, 50, 0.3, 0.1)
+
+
 SFX = {
     "hover": lambda s: s.tone("square", 1400, 1400, 0.025, 0.025),
     "click": lambda s: s.tone("square", 660, 990, 0.05, 0.06),
@@ -825,6 +882,11 @@ SFX = {
     "legend": lambda s: (s.arp("square", [523, 659, 784, 1047, 1319, 1568], 0.08, 0.3, 0.05), sfx_shiny(s)),
     "gameover": lambda s: s.arp("triangle", [523, 440, 349, 262], 0.2, 0.35, 0.08),
     "biome": sfx_biome,
+    "quake": sfx_quake,
+    "toll": sfx_toll,
+    "descend": sfx_descend,
+    "land": sfx_land,
+    "judge": sfx_judge,
     "pause": lambda s: s.arp("square", [784, 523], 0.06, 0.07, 0.04),
     "buy": lambda s: (sfx_coin(s), s.arp("triangle", [659, 784, 1047], 0.05, 0.12, 0.06)),
 }
@@ -865,11 +927,17 @@ def main():
     only = None
     if "--only" in sys.argv:
         only = sys.argv[sys.argv.index("--only") + 1]
+    # --names a,b,c: sólo esos temas/efectos (los demás ficheros no se tocan).
+    names = None
+    if "--names" in sys.argv:
+        names = set(sys.argv[sys.argv.index("--names") + 1].split(","))
     t0 = time.time()
     total = 0
     if only in (None, "music"):
         os.makedirs(OUT_MUSIC, exist_ok=True)
         for name, song in MUSIC.items():
+            if names is not None and name not in names:
+                continue
             t1 = time.time()
             data = render_song(name, song)
             path = os.path.join(OUT_MUSIC, name + ".wav")
@@ -880,6 +948,8 @@ def main():
     if only in (None, "sfx"):
         os.makedirs(OUT_SFX, exist_ok=True)
         for name, fn in all_sfx_jobs():
+            if names is not None and name not in names:
+                continue
             s = Sfx()
             fn(s)
             data = s.render()

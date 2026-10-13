@@ -194,6 +194,16 @@ function Ga.pull(gen, n, payWith)
             if forceShiny > 0 then forceShiny = forceShiny - 1; shiny = true
             else shiny = random() < Ga.SHINY_RATE end
         end
+        -- Los shiny no se repiten: si ya tienes ese, sale otro de la misma rareza
+        -- cuyo shiny te falte; si los tienes todos, sale normal.
+        if shiny and s.shiny[mon.dex] ~= nil then
+            local missing = {}
+            for k = 1, #list do
+                local p = list[k]
+                if G.Sprites.hasShiny(p.dex) and s.shiny[p.dex] == nil then missing[#missing + 1] = p end
+            end
+            if #missing > 0 then mon = U.pick(missing) else shiny = false end
+        end
 
         local isNew, coins = false, 0
         if shiny then

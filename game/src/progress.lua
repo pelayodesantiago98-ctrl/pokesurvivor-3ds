@@ -254,6 +254,13 @@ function P.event(kind, d)
         if d.id then s.itemsFound[d.id] = s.itemsFound[d.id] or now end
     elseif kind == 'runEnd' then
         if d.group then S.groupRuns = (S.groupRuns or 0) + 1 end
+    elseif kind == 'judge' then
+        -- Llegas a la Sentencia de Arceus (minuto 30).
+        S.judged = (S.judged or 0) + 1
+    elseif kind == 'judgeEnd' then
+        -- Aguantado ante Arceus (al acabar la partida): mejor tiempo y más legendarios.
+        S.judgeTime = math.max(S.judgeTime or 0, math.floor(d.time or 0))
+        S.judgeBosses = math.max(S.judgeBosses or 0, d.bosses or 0)
     end
     advance(s.missions.daily, kind, d)
     advance(s.missions.weekly, kind, d)
@@ -265,6 +272,16 @@ end
 -- Un enemigo ha caído (tabla de datos reutilizada: hay cientos por partida).
 local killD = { types = nil, boss = false, legend = 0 }
 function P.kill(e)
+    -- Los legendarios de la Sentencia de Arceus no cuentan como jefes (ni para
+    -- misiones ni para logros de jefes): tienen su propio contador.
+    if G.Judgment.active() and e.boss then
+        G.Judgment.bossDown()
+        killD.types = e.types or EMPTY
+        killD.boss = false
+        killD.legend = 0
+        P.event('kill', killD)
+        return
+    end
     local legend = 0
     if e.legend or (G.Rift.inArena() and e.boss) then legend = e.dex end
     killD.types = e.types or EMPTY

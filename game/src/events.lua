@@ -256,7 +256,7 @@ function E.update(dt, pl, time)
         if cur.id ~= 'lost' and cur.t >= cur.dur then endEvent() end
     end
     if lost then lostTick(dt, pl) end
-    if G.Rift.inArena() then return end
+    if G.Rift.inArena() or G.Judgment.active() then return end
 
     if thieves < 2 then
         thiefT = thiefT - dt

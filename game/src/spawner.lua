@@ -113,9 +113,18 @@ function S.update(dt, pl, t)
     if announceT > 0 then announceT = announceT - dt end
     S.tickZone(dt)
     -- En la arena de la grieta no sale nada más (y el reloj de jefes espera).
-    if G.Rift.inArena() then return end
+    -- En la Sentencia de Arceus, sólo sus legendarios (src/judgment.lua).
+    if G.Rift.inArena() or G.Judgment.active() then return end
 
     local stage = G.Stages.active()
+
+    -- Aviso al empezar el tiempo extra (los enemigos se endurecen cada vez más
+    -- deprisa, ver G.Enemies.late).
+    local lf = G.Enemies.LATE_FROM * 60
+    if t >= lf and t - dt < lf then
+        S.say('¡Los Pokémon salvajes se vuelven cada vez más fuertes!', 3.6)
+        G.Audio.sfx('boss')
+    end
 
     -- Precarga lo que va a salir en el próximo minuto y descarga lo viejo.
     preloadT = preloadT - dt

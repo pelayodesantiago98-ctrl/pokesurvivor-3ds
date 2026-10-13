@@ -161,8 +161,22 @@ local function arenaBiome(th)
 end
 for i = 1, #ARENA_TYPES do BIOMES[ARENA + i - 1] = arenaBiome(ARENA_THEMES[ARENA_TYPES[i]]) end
 
+-- La arena de Arceus al minuto 30 (src/judgment.lua): ceniza, ruinas y árboles
+-- muertos, con un claro donde aterriza (clear). No es de ninguna grieta: va
+-- aparte (bioma JUDGMENT, img/tiles/21.png) y no entra en ARENA_TYPES ni en el
+-- ciclo de biomas de la run.
+ARENA_THEMES.judgment = { name = 'Ruinas del Juicio', floor = '#4a4240', wall = '#2e2829', liquid = 'lava', liq = '#e8a82a',
+                          foam = '#fff1b8', prop = 'dead', leaf = '#3e3633', trunk = '#2a2321',
+                          flowers = { '#8a7f76', '#e8a82a', '#5a514c' }, grass = '#5e544c', rock = '#6a625c',
+                          pools = 0, pillars = 0.03, props = { tree = 0.012, rock = 0.02 }, weather = nil, clear = 4.5 }
+local JUDGMENT = ARENA + #ARENA_TYPES
+Tiles.JUDGMENT = JUDGMENT
+BIOMES[JUDGMENT] = arenaBiome(ARENA_THEMES.judgment)
+BIOMES[JUDGMENT].name = ARENA_THEMES.judgment.name
+
 -- Índice de bioma de la arena de un tipo.
 function Tiles.arenaBiome(typ)
+    if typ == 'judgment' then return JUDGMENT end
     local i = U.indexOf(ARENA_TYPES, typ)
     return ARENA + ((i or 1) - 1)
 end
@@ -216,9 +230,11 @@ end
 local function arenaOuter() if arena then return arena.r + 7 end return 0 end
 
 -- Pasillo libre de la arena: donde apareces (sur) y el legendario (norte).
+-- Con `clear` en el tema, además un claro donde aterriza Arceus (5 al norte).
 local function arenaSafe(tx, ty)
     local lx, ly = tx - arena.tx, ty - arena.ty
     return (abs(lx) <= 2 and ly >= -6 and ly <= 5) or U.hypot(lx, ly) < 2.5
+        or ((arena.th.clear or 0) > 0 and U.hypot(lx, ly + 5) < arena.th.clear)
 end
 
 local function terrainRaw(tx, ty)

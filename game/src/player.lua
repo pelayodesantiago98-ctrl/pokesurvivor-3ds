@@ -88,7 +88,11 @@ function Player.new(mon, perks, shiny)
     self.xpNext = Player.xpFor(1)
     -- Pantalla de mejoras (idea de Pokémon Survivor Burst): repetir la tirada y
     -- vetar cartas (lo vetado no vuelve a salir en la run).
-    self.rerolls, self.bans, self.banned = 2, 2, {}
+    -- La mejora "Repetir" (web: "Cambio de cartas") suma a las 2 gratis; la de
+    -- "Veto" pone en `banned` los movimientos elegidos en Mejoras (Game.startRun).
+    self.rerolls, self.bans, self.banned = 2 + (perks.rerolls or 0), 2, {}
+    self.critChance = perks.crit or 0   -- probabilidad de golpe crítico (Mejoras)
+    self.bind = {}                      -- movimiento -> hueco fijo (1-4), elegido en Mejoras > Atajos
     self.burst = 0             -- barra del ataque Burst (0..1)
     self.kills = 0
     self.bosses = 0
@@ -152,11 +156,61 @@ function Player:addMove(id)
     if #self.slots >= self.maxMoves or self:hasMove(id) then return false end
     local m = G.Moves.instance(id, 1)
     self.moves[#self.moves + 1] = m
-    self.slots[#self.slots + 1] = { m }
+    local group = { m }
+    self.slots[#self.slots + 1] = group
+    self:arrange()
     -- Se cambia al nuevo, salvo si estás usando un vínculo (no te quita el grupo).
     local cur = self.slots[self.active]
-    if not (cur and #cur > 1) then self:setActive(#self.slots) end
+    if not (cur and #cur > 1) then self:setActive(U.indexOf(self.slots, group) or #self.slots) end
     return true
+end
+
+-- Huecos fijos (Mejoras > Atajos): cada movimiento con hueco elegido se pone en
+-- ese número para la memoria muscular (Confusión siempre en el 1...). Mientras
+-- no tengas tantos movimientos, va al más cercano; los demás rellenan los
+-- huecos libres en el orden en que los aprendiste.
+function Player:arrange()
+    local n = #self.slots
+    if n < 2 or not self.bind or next(self.bind) == nil then return end
+    local bind = self.bind
+    local function want(g)
+        local k = math.huge
+        for i = 1, #g do
+            local b = bind[g[i].id]
+            if b and b < k then k = b end
+        end
+        return k
+    end
+    local cur = self.slots[self.active]
+    local out, placed = {}, {}     -- (out tiene huecos mientras se rellena: nada de #out)
+    local bound = {}
+    for i = 1, n do
+        local g = self.slots[i]
+        if want(g) < math.huge then bound[#bound + 1] = g end
+    end
+    -- (Orden estable: a igual hueco, el que se aprendió antes.)
+    for i = 2, #bound do
+        local g, j = bound[i], i - 1
+        while j >= 1 and want(bound[j]) > want(g) do bound[j + 1] = bound[j]; j = j - 1 end
+        bound[j + 1] = g
+    end
+    for i = 1, #bound do
+        local g = bound[i]
+        local p = min(want(g), n)
+        while p >= 1 and out[p] do p = p - 1 end          -- ocupado: el de antes
+        if p < 1 then p = 1; while out[p] do p = p + 1 end end   -- o el primero libre
+        out[p] = g; placed[g] = true
+    end
+    for i = 1, n do
+        local g = self.slots[i]
+        if not placed[g] then
+            local p = 1
+            while out[p] do p = p + 1 end
+            out[p] = g; placed[g] = true
+        end
+    end
+    self.slots = out
+    if cur then self.active = U.indexOf(out, cur) or self.active end
 end
 
 function Player:hasMove(id)
@@ -231,6 +285,7 @@ function Player:fuse(moves, group)
             end
         end
     end
+    self:arrange()
     -- Se pasa al grupo, salvo con la Cinta Elección (sigues en el hueco que tenías, si queda).
     local a = U.indexOf(self.slots, cur)
     if self:hasItem('choiceband') and a then self.active = a
@@ -277,8 +332,9 @@ function Player:cast(m)
 end
 
 -- ---------------- daño y curación ----------------
---- @param ty  tipo del ataque (tabla de tipos y clima); sin tipo, daño tal cual
-function Player:hurt(amount, ty)
+--- @param ty    tipo del ataque (tabla de tipos y clima); sin tipo, daño tal cual
+--- @param pure  daño que no baja con la defensa ni el cuerpo a cuerpo (Arceus)
+function Player:hurt(amount, ty, pure)
     if self.invuln > 0 or self.dead then return end
     local eff = nil
     if ty then
@@ -293,7 +349,7 @@ function Player:hurt(amount, ty)
     for i = 1, #g do
         if g[i].kind == 'melee' then close = 0.75 break end
     end
-    local d = max(1, amount * (1 - self:reduction()) * close)
+    local d = pure and max(1, amount) or max(1, amount * (1 - self:reduction()) * close)
     self.hp = self.hp - d
     if G_SOAK then
         -- Pruebas aceleradas: de dónde viene el último golpe (se muestra al morir).

@@ -563,6 +563,10 @@ function over.draw()
     row("Nivel", tostring(r.level))
     row("Derrotados", tostring(r.kills))
     row("Jefes", tostring(r.bosses))
+    if r.judge then
+        -- Lo aguantado en la Sentencia de Arceus.
+        row("Ante Arceus", U.mmss(r.judge.time) .. " · " .. r.judge.bosses .. (r.judge.bosses == 1 and " legendario" or " legendarios"), UI.C.gold)
+    end
     row("Pokémonedas", "+" .. r.coins, UI.C.gold)
     UI.text(r.breakdown or "", 150, y - 2, { size = 10, color = UI.C.muted, w = 160 })
     y = y + (UI.textWidth(r.breakdown or "", 10) > 160 and 24 or 14)

@@ -19,7 +19,7 @@ Python) y el juego lo dibuja con SpriteBatch:
                     bigchest, trap(0..2), rift(0..3)
 
 Uso:  "C:\\Program Files\\Python314\\python.exe" tools/gen_tiles.py
-Salida (en game/): img/tiles/<bi>.png (bi = 0..20) y data/tiles.lua
+Salida (en game/): img/tiles/<bi>.png (bi = 0..21; el 21 es la arena de Arceus) y data/tiles.lua
 """
 import math
 import os
@@ -165,6 +165,17 @@ def arena_biome(th):
 for _t, _th in ARENA_THEMES:
     BIOMES.append(arena_biome(_th))
 assert len(BIOMES) == 21
+
+# La arena de Arceus al minuto 30 (src/judgment.lua): ceniza, ruinas y árboles
+# muertos, con un claro donde aterriza (clear). No es de ninguna grieta, así que
+# va aparte (bioma 21) y no entra en ARENA_TYPES.
+JUDGMENT_THEME = {'name': 'Ruinas del Juicio', 'floor': '#4a4240', 'wall': '#2e2829', 'liquid': 'lava', 'liq': '#e8a82a',
+                  'foam': '#fff1b8', 'prop': 'dead', 'leaf': '#3e3633', 'trunk': '#2a2321',
+                  'flowers': ['#8a7f76', '#e8a82a', '#5a514c'], 'grass': '#5e544c', 'rock': '#6a625c',
+                  'pools': 0, 'pillars': 0.03, 'props': {'tree': 0.012, 'rock': 0.02}, 'weather': None, 'clear': 4.5}
+JUDGMENT = len(BIOMES)
+BIOMES.append(dict(arena_biome(JUDGMENT_THEME), name=JUDGMENT_THEME['name']))
+assert len(BIOMES) == 22
 
 
 def pack(hex_, a=255):
@@ -930,6 +941,7 @@ def write_lua(atlas_info):
     L.append('--   wallshadow (2 filas bajo una pared al norte) · prop_<tipo>_<variante> (ancla: centro inferior)')
     L.append('local M = { T = %d, NORMAL = %d, ARENA = %d }' % (T, NORMAL, ARENA))
     L.append('M.ARENA_TYPES = ' + lua_val(ARENA_TYPES))
+    L.append('M.JUDGMENT = %d   -- bioma de la arena de Arceus (Ruinas del Juicio)' % JUDGMENT)
     L.append('M.ARENA_THEMES = {')
     for t, th in ARENA_THEMES:
         L.append('  %s = %s,' % (t, lua_val(th)))

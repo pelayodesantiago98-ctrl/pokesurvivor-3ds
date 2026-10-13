@@ -131,7 +131,7 @@ function W.update(dt, time, pl)
     if cur then
         cur.t = cur.t + dt
         if cur.t >= cur.dur then cur = nil end
-    elseif time > FROM and not G.Rift.inArena() then
+    elseif time > FROM and not G.Rift.inArena() and not G.Judgment.active() then
         checkT = checkT - dt
         if checkT <= 0 then
             checkT = CHECK

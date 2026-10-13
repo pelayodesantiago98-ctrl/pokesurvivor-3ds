@@ -34,7 +34,8 @@ local KIND = K.KIND
 -- Icono de cada clase (baya, imán, bomba, tickets); los objetos usan su propio id.
 local ICON = { heal = 'berry', magnet = 'magnet', bomb = 'bomb', ticket = 'ticket', ticket10 = 'ticket10' }
 
-local BOSS_T10 = 1 / 3            -- ticket ×10 de un jefe normal (el legendario, siempre)
+local BOSS_T10 = 1 / 3            -- ticket ×10 de un jefe normal
+local LEGEND_T10 = 1 / 2          -- ticket ×10 del legendario de la grieta (antes daba 2 siempre)
 local TICKET_RATE = 1 / 400       -- probabilidad de que un Pokémon normal suelte un ticket
 
 function K.clear()
@@ -83,17 +84,20 @@ function K.pullAll()
     for i = 1, #list do list[i].pulled = true end
 end
 
-function K.dropXp(x, y, value, boss, legend)
+-- @param plain  sólo la experiencia (los legendarios de la Sentencia de Arceus)
+function K.dropXp(x, y, value, boss, legend, plain)
     if boss then
         -- Los jefes revientan en un montón de orbes grandes + recompensas.
         for _ = 1, 14 do
             local a, d = random() * TAU, U.rand(10, 70)
             push(orb('xpBig', x + cos(a) * d, y + sin(a) * d, ceil(value / 14)))
         end
+        if plain then return end
         push(orb('heal', x + 24, y, 0))
         push(orb('magnet', x - 24, y, 0))
-        -- Ticket ×10: siempre el legendario de la grieta; un jefe normal, 1 de cada 3 veces.
-        if legend or random() < BOSS_T10 then push(orb('ticket10', x, y - 20, 1)) end
+        -- Ticket ×10: el legendario de la grieta, la mitad de las veces; un jefe
+        -- normal, 1 de cada 3. (Hasta el 12-10-2026 el legendario daba siempre 2.)
+        if random() < (legend and LEGEND_T10 or BOSS_T10) then push(orb('ticket10', x, y - 20, 1)) end
         return
     end
     push(orb(value >= 20 and 'xpBig' or 'xp', x, y, value))

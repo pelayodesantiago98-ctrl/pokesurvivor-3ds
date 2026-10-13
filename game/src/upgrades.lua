@@ -14,7 +14,13 @@ local LIST = {
     { id = 'magnet', icon = 'magnet', name = 'Imán',       unit = '+12% recogida',     max = 6,  base = 50,   grow = 1.4 },
     { id = 'xp',     icon = 'book',   name = 'Sabiduría',  unit = '+5% experiencia',   max = 8,  base = 100,  grow = 1.42 },
     { id = 'coins',  icon = 'coin',   name = 'Fortuna',    unit = '+8% Pokémonedas',   max = 8,  base = 120,  grow = 1.45 },
-    { id = 'moves',  icon = 'cards',  name = 'Repertorio', unit = 'Empiezas con 2 movimientos', max = 1, base = 1500, grow = 1 }
+    { id = 'moves',  icon = 'cards',  name = 'Repertorio', unit = 'Empiezas con 2 movimientos', max = 1, base = 1500, grow = 1 },
+    -- Nuevas (web, 12-10-2026). En la 3DS se suman a los 2 repetir + 2 vetar
+    -- gratis de la pantalla de cartas; el Veto deja elegir aquí movimientos
+    -- que no salen nunca en las cartas (save.pban[dex], ver ui/menu.lua).
+    { id = 'crit',   icon = 'star',   name = 'Crítico',    unit = '+3% crítico (x1,5)', max = 10, base = 90,   grow = 1.4 },
+    { id = 'reroll', icon = 'up',     name = 'Repetir',    unit = '+1 repetir cartas',  max = 5,  base = 150,  grow = 1.6 },
+    { id = 'ban',    icon = 'ban',    name = 'Veto',       unit = '+1 mov. vetado',     max = 3,  base = 300,  grow = 1.9 }
 }
 Up.LIST = LIST
 
@@ -42,6 +48,9 @@ function Up.perks(levels)
         magnetMul = 1 + L('magnet') * 0.12,
         xpMul = 1 + L('xp') * 0.05,
         coinMul = 1 + L('coins') * 0.08,
-        startMoves = 1 + L('moves')
+        startMoves = 1 + L('moves'),
+        crit = L('crit') * 0.03,         -- probabilidad de golpe crítico
+        rerolls = L('reroll'),           -- repeticiones de cartas extra por run
+        bans = L('ban')                  -- movimientos que se pueden vetar desde Mejoras
     }
 end

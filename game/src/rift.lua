@@ -4,7 +4,8 @@
 -- Dura TTL segundos; si entras, te lleva a una arena cerrada en el Mundo
 -- Distorsión, contra un Pokémon LEGENDARIO.
 --
---   ganas    el legendario suelta tickets ×10 y más, y te llevas un VÍNCULO
+--   ganas    el legendario suelta tickets (el ×10, la mitad de las veces) y
+--            monedas, y te llevas un VÍNCULO
 --            (fusiona movimientos, ver Player.fuse); a los pocos segundos vuelves
 --            al mapa donde estabas y se elige la fusión
 --   pierdes  (caes o se acaba el tiempo) vuelves sin premio, con algo de vida;
@@ -148,13 +149,15 @@ local function spawnLegend()
     local ts = TS()
     local ranged = false
     for i = 1, #mon.types do if RANGED_TYPES[mon.types[i]] then ranged = true end end
+    local lk = G.Enemies.late(t)             -- tiempo extra (ver G.Enemies.late)
+    local dk = lk ^ 0.7
     local def = {
         dex = mon.dex, name = mon.name,
-        hp = U.round(3200 + t * 9),
+        hp = U.round((3200 + t * 9) * lk),
         spd = U.round(U.clamp(48 + (mon.spd - 78) * 0.6, 48, 105)),
-        dmg = U.round(36 + t / 20), xp = U.round(500 + t * 1.2),
+        dmg = U.round((36 + t / 20) * dk), xp = U.round(500 + t * 1.2),
         behavior = ranged and 'ranged' or 'charger',
-        shotDmg = U.round(18 + t / 40), shotCd = 0.9, range = 300
+        shotDmg = U.round((18 + t / 40) * dk), shotCd = 0.9, range = 300
     }
     local e = G.Enemy.new(def, arena.x, arena.y - ts * 3.5, { hp = 1, spd = 1, dmg = 1 }, true)
     e.legend = true
@@ -288,7 +291,8 @@ function R.update(dt, pl, time)
         if rift and random() < 0.3 then
             G.FX.px(rift.x + U.rand(-14, 14), rift.y - U.rand(10, 80), '#d9c2ff', PX_OPTS)
         end
-    elseif not arena and time > FROM then
+    elseif not arena and time > FROM and not (G.Judgment.applies() and time >= G.Judgment.AT - 120) then
+        -- (Desde 2 min antes de la Sentencia de Arceus ya no se abren grietas.)
         checkT = checkT - dt
         if checkT <= 0 then
             checkT = CHECK

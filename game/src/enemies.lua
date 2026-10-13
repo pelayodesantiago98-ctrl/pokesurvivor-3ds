@@ -272,13 +272,32 @@ function E.rollRun()
     return { cast = cast, bosses = bosses }
 end
 
+-- Tiempo extra (web, 12-10-2026). Hasta el minuto 60 todo sigue igual; desde
+-- ahí la vida (y algo menos el daño) crece cada vez más deprisa, como en otros
+-- "survivors". Antes crecía en línea recta y, con las mejoras al máximo, las
+-- mejores builds aguantaban sin fin.
+--   minuto   60    75    90    105   120   150
+--   vida    x1   x1,09 x1,4  x2,1  x3,8  x21    (además de la subida normal)
+-- (En la web se quitó al llegar la Sentencia de Arceus del minuto 30; aquí se
+-- mantiene: vale para todo lo que siga saliendo pasada la hora.)
+E.LATE_FROM = 60
+local LATE_K = 0.000374
+function E.late(t)
+    local m = math.max(0, t / 60 - E.LATE_FROM)
+    return math.exp(math.min(30, LATE_K * m * m))
+end
+
 function E.scale(t)
-    return { hp = 1 + t / 95, dmg = 1 + t / 420, spd = 1 + math.min(0.35, t / 1400) }
+    local k = E.late(t)
+    return { hp = (1 + t / 95) * k, dmg = (1 + t / 420) * k ^ 0.7, spd = 1 + math.min(0.35, t / 1400) }
 end
 
 -- Los jefes ya traen su vida base creciente (1.400 ... 16.000), así que
 -- escalan mucho más suave: con la curva normal el último llegaba a 168.000 PV.
-function E.bossScale(t) return { hp = 1 + t / 600, dmg = 1 + t / 600, spd = 1 } end
+function E.bossScale(t)
+    local k = E.late(t)
+    return { hp = (1 + t / 600) * k, dmg = (1 + t / 600) * k ^ 0.7, spd = 1 }
+end
 
 -- Índice (1-based, en E.TIERS) del tramo que toca en el segundo `t`.
 function E.tierAt(t)

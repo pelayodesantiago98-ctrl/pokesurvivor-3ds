@@ -159,6 +159,7 @@ function Enemy:hurt(amount, color, dirX, dirY, knock, eff)
         amount = d - a
     end
     self.hp = self.hp - max(1, U.round(amount))
+    G.Judgment.noteDmg(amount, self)
     self:showHurt(d, color, dirX, dirY, eff)
     if knock > 0 and not self.boss then
         local nx, ny = U.norm(dirX, dirY)
@@ -171,10 +172,11 @@ end
 --- Lo que se VE al recibir un golpe.
 function Enemy:showHurt(d, color, dirX, dirY, eff)
     self.flash = 0.09
-    -- Muy eficaz: número amarillo y grande. Poco eficaz: gris.
+    -- Muy eficaz: número amarillo y grande. Poco eficaz: gris. Crítico: naranja y grande.
     local col = color
-    if eff == 'super' then col = '#ffe14d' elseif eff == 'weak' then col = '#a3abb8' end
-    G.FX.dmgText(self.x, self.y - self.bodyH - 4, d, col, self.boss or eff == 'super')
+    if eff == 'crit' then col = '#ff9a3c'
+    elseif eff == 'super' then col = '#ffe14d' elseif eff == 'weak' then col = '#a3abb8' end
+    G.FX.dmgText(self.x, self.y - self.bodyH - 4, d, col, self.boss or eff == 'super' or eff == 'crit')
     G.FX.spark(self.x, self.y - self.bodyH * 0.5, color, dirX or 0, dirY or 0, 3)
     if not self.anim:busy() and self.phase ~= 'dash' then play(self.anim, 'Hurt') end
     G.Audio.sfx('hit')
@@ -202,13 +204,14 @@ function Enemy:die()
     local cy = self.y - self.bodyH * 0.5
     G.FX.burst(self.x, cy, col, self.boss and 34 or 9, self.boss and 260 or 120)
     G.FX.ring(self.x, self.y, self.r, self.r * (self.boss and 6 or 2.6), col, self.boss and 0.6 or 0.3, self.boss and 6 or 3)
-    if self.boss then
+    -- (Los legendarios de la Sentencia de Arceus sólo dan experiencia.)
+    if self.boss and not self.judge then
         G.Camera.kick(0.9)
         for i = 1, 10 do G.Pickups.drop('coin', self.x + U.rand(-40, 40), self.y + U.rand(-30, 30), 5) end
         -- Los jefes siempre sueltan un objeto equipable.
         G.Pickups.drop('item', self.x - 26, self.y - 10, G.Items.roll())
     end
-    G.Pickups.dropXp(self.x, self.y, self.xp, self.boss, self.legend and true or false)
+    G.Pickups.dropXp(self.x, self.y, self.xp, self.boss, self.legend and true or false, self.judge and true or false)
     if self.golden and random() < 0.35 then G.Pickups.drop('coin', self.x + 6, self.y - 4, 3) end
     -- Duende del tesoro: Meowth suelta monedas; Gholdengo, un ticket ×10.
     if self.behavior == 'thief' then
@@ -218,8 +221,8 @@ function Enemy:die()
         G.FX.ring(self.x, self.y, self.r, self.r * 5, '#ffd23f', 0.6, 4)
     end
     if self.legend then
-        -- El legendario de la grieta: además del ticket ×10 de todo jefe.
-        G.Pickups.drop('ticket10', self.x + 20, self.y - 16, 1)
+        -- El legendario de la grieta: tickets sueltos y monedas (el ×10, la
+        -- mitad de las veces, en dropXp; antes daba 2 siempre).
         for i = 1, 3 do G.Pickups.drop('ticket', self.x + U.rand(-30, 30), self.y + U.rand(-20, 20), 1) end
         for i = 1, 10 do G.Pickups.drop('coin', self.x + U.rand(-50, 50), self.y + U.rand(-35, 35), 8) end
     end
@@ -266,8 +269,8 @@ function Enemy:update(dt, pl)
 
     -- --- terreno ---
     local terrainMul = 1
-    -- (El legendario está en su casa: su arena no le afecta.)
-    if not self.flying and not self.legend and G.World.isLiquid(self.x, self.y) then
+    -- (El legendario está en su casa: su arena no le afecta. Los de Arceus, tampoco.)
+    if not self.flying and not self.legend and not self.judge and G.World.isLiquid(self.x, self.y) then
         local le = G.World.liquidEffect(self.types)
         if le.dmg then
             self.lavaTick = self.lavaTick - dt
@@ -478,7 +481,7 @@ end
 function Enemy:enrage()
     self.ai.fury = true
     self.spd = self.spd * 1.15
-    G.Spawner.say('¡' .. self.name .. ' se ha enfurecido!', 2.4)
+    if not self.judge then G.Spawner.say('¡' .. self.name .. ' se ha enfurecido!', 2.4) end
     G.FX.ring(self.x, self.y, self.r, self.r * 5, '#ff4a4a', 0.6, 5)
     G.Camera.kick(0.5)
     G.Audio.sfx('boss')
@@ -997,7 +1000,7 @@ function M.update(dt, pl)
         local e = list[i]
         if e.dead then
             pl.kills = pl.kills + 1
-            if e.boss then pl.bosses = pl.bosses + 1 end
+            if e.boss and not e.judge then pl.bosses = pl.bosses + 1 end
             G.Burst.add(pl, e.boss and G.Burst.GAIN_BOSS or G.Burst.GAIN_KILL)
             G.Progress.kill(e)
             corpses[#corpses + 1] = e
