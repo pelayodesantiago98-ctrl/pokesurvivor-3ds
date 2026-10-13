@@ -47,7 +47,8 @@ El código nuevo de este port se publica en las mismas condiciones (MIT).
   de SirMaio, versión de jls-dchrn/HGSS_pokemon_tileset.
 - Sprites de entrenadores (tarjeta): colección de Pokémon Showdown; sprites de
   Negro/Blanco y de objetos: PokeAPI/sprites; datos: PokeAPI (https://pokeapi.co/).
-- Música y efectos: generados para este port (tools/gen_audio.py).
+- Música y efectos: los de PokéSurvivor (js/data/music.js, de JPTER78, licencia
+  MIT), pasados a audio con tools/gen_audio.py.
 
 3) MARCAS
 
