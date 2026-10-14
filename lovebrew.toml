@@ -5,7 +5,7 @@
 title = "PokeSurvivor"
 author = "lepay"
 description = "Survivor fan-made para 3DS"
-version = "0.1.0"
+version = "0.2.0"
 icons = { ctr = "assets/icon.png", hac = "", cafe = "" }
 
 [build]
