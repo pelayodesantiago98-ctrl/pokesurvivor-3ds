@@ -83,6 +83,22 @@ if IS_CONSOLE then
     end
 end
 G_DIAG = IS_CONSOLE and G_FLAGS.diag
+-- Sin el diagnóstico completo, lo que pasa de vez en cuando (G_MARKF: cargar hojas,
+-- generar mapa, sonidos...) se apunta en memoria; si un fotograma tarda mucho
+-- (love.update), va al rastro junto con lo que pasó en él: así se ve qué da tirones.
+local evRing, evN = {}, 0
+G_EVENTS_TAKE = function()
+    if evN == 0 then return "" end
+    local s = table.concat(evRing, " ", 1, evN)
+    evN = 0
+    return s
+end
+G_EVENTS_CLEAR = function() evN = 0 end
+if not G_DIAG then
+    function G_MARKF(s)
+        if evN < 24 then evN = evN + 1; evRing[evN] = s end
+    end
+end
 local markF, markFrames = nil, 0
 if G_DIAG then
     function G_MARK(s)
@@ -585,9 +601,20 @@ function love.update(dt)
     G_VERTS = 0
     PERF.n = PERF.n + 1
     if dt > PERF.worst then PERF.worst = dt end
-    -- Cada 10 s, al rastro: pico de vértices por fotograma, si se saltó dibujo y los FPS.
+    -- (¿Ha pasado el recolector de memoria de Lua? La memoria baja de golpe.)
+    local memNow = collectgarbage("count")
+    if G_MARKF and memNow < (G_LAST_MEM or 0) - 512 then G_MARKF(string.format("GC%d->%dKB", G_LAST_MEM, memNow)) end
+    G_LAST_MEM = memNow
+    -- Tirón (fotograma de más de 120 ms): al rastro, con lo que pasó en él.
+    if dt > 0.12 and G_STEP and G_EVENTS_TAKE then
+        G_STEP(string.format("tiron %d ms (%s): %s", dt * 1000, tostring(G.UI.current and G.UI.current()), G_EVENTS_TAKE()))
+    elseif G_EVENTS_CLEAR then
+        G_EVENTS_CLEAR()
+    end
+    -- Cada 30 s, al rastro: pico de vértices por fotograma, si se saltó dibujo y los FPS.
+    -- (Cada escritura en la SD es un tirón de ~20 ms.)
     vertLogT = vertLogT + dt
-    if vertLogT >= 10 then
+    if vertLogT >= 30 then
         vertLogT = 0
         if G_STEP then
             local n = math.max(1, PERF.n)

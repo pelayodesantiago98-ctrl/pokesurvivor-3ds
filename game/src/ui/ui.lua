@@ -59,9 +59,10 @@ function UI.screen(name) return screens[name] end
 function UI.show(name, data)
     local scr = screens[name]
     if not scr then print("[UI] pantalla desconocida: " .. tostring(name)) return end
-    -- A la SD en el acto (~20 ms, sólo al cambiar de pantalla): si la consola se
-    -- cierra, el rastro dice en qué pantalla estaba.
-    if G_STEP then G_STEP("UI.show " .. tostring(name), true) end
+    -- Al rastro (en memoria; va a la SD con la línea de rendimiento). Escribirlo en el
+    -- acto eran ~20 ms de tirón en cada subida de nivel (cartas y vuelta al HUD).
+    if G_STEP then G_STEP("UI.show " .. tostring(name)) end
+    if G_MARKF then G_MARKF("UI:" .. tostring(name)) end
     if current and current.leave then current.leave() end
     current, currentName = scr, name
     G.TopUI.overlay = nil

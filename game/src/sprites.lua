@@ -98,7 +98,6 @@ local function loadSheet(dex, full, shiny)
     if G_PRINT_STEPS and G_STEP then G_STEP("hoja de sprites " .. tostring(set.atlas)) end
     if G_MARKF then G_MARKF("LOAD:" .. key) end
     local ok, img = pcall(lg.newImage, U.img(set.atlas))
-    if G_MARKF then G_MARKF("ok") end
     if not ok or not img then
         -- Sin memoria: suelta todo lo que no se esté dibujando y prueba otra vez.
         evict(0, 0.5)
