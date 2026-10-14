@@ -940,6 +940,7 @@ end
 
 local function destroyProp(p)
     broken[tkey(p.tx, p.ty)] = true
+    p.gone = true                 -- (G.Interact guarda la lista unos instantes)
     local c = data[ckey(floor(p.tx / N), floor(p.ty / N))]
     if c then
         local props = c.props
@@ -1065,6 +1066,7 @@ local function loadTileset(bi)
     if not TILES then return nil end
     local q = TILES.quads and TILES.quads[bi]
     if not q then print('[World] data/tiles.lua no tiene cuadros del bioma ' .. bi) return nil end
+    if G_STEP then G_STEP("tiles del bioma " .. tostring(bi)) end
     local ok, img = pcall(lg.newImage, U.img('img/tiles/' .. bi))
     if not ok or not img then
         print('[World] no se pudo cargar img/tiles/' .. bi .. ': ' .. tostring(img))
@@ -1126,7 +1128,7 @@ end
 
 -- Batches por chunk (sólo los visibles). Cada entrada: { key, batch, used }.
 -- Las entradas con key == nil están libres para reutilizar (sin crear objetos).
-local MAX_BATCHES = 16
+local MAX_BATCHES = 96
 local batches = {}                           -- clave de chunk -> entrada
 local batchList = {}                         -- todas las entradas creadas
 
@@ -1145,9 +1147,12 @@ local function invalidateBatches()
     for k in pairs(batches) do batches[k] = nil end
 end
 
+-- key es la del trozo (ckey); sus lotes son key * SUBS + sub.
 dropBatch = function(key)
-    local e = batches[key]
-    if e then batches[key] = nil; e.key = nil end
+    for h = 0, SUBS - 1 do
+        local e = batches[key * SUBS + h]
+        if e then batches[key * SUBS + h] = nil; e.key = nil end
+    end
 end
 
 local function releaseTileset()
@@ -1171,20 +1176,29 @@ local function ensureTileset()
 end
 
 -- Rellena el batch de un chunk: suelo, tierra, pared/líquido, sombra de pared.
-local function buildBatch(b, cx, cy)
+-- Cada lote cubre un bloque de BW x BH baldosas del trozo (sub = 0..SUBS-1) y se
+-- dibuja entero: así sólo se mandan los bloques visibles. (No se usa setDrawRange:
+-- en LÖVE Potion 3.0.2 SpriteBatch::Draw toma las posiciones de buffer[start] en vez
+-- de buffer[start * 6] y, con un rango que no empieza en 0, descoloca las baldosas.)
+local BW, BH = 8, 4
+local SUBX, SUBY = N / BW, N / BH
+local SUBS = SUBX * SUBY
+local function buildBatch(b, cx, cy, sub)
     local ts = tileset
     b:clear()
     local c = chunkData(cx, cy)
     local terr, dirt = c.terr, c.dirt
     local fl, dq, wq, lq, shadow = ts.floor, ts.dirt, ts.wall, ts.liquid, ts.shadow
-    for j = 0, N - 1 do
-        for i = 0, N - 1 do
+    local add = function(q, x, y) b:add(q, x, y) end
+    local sx, sy = sub % SUBX, floor(sub / SUBX)
+    for j = sy * BH, sy * BH + BH - 1 do
+        for i = sx * BW, sx * BW + BW - 1 do
             local tx, ty = cx * N + i, cy * N + j
             local idx = j * N + i + 1
             local kind = terr[idx]
             local px, py = i * T, j * T
             local fq = fl[floor(H(tx, ty, 14) * 6)] or fl[0]
-            if fq then b:add(fq, px, py) end
+            if fq then add(fq, px, py) end
             if kind == FLOOR then
                 if dirt[idx] then
                     local m = 0
@@ -1193,10 +1207,10 @@ local function buildBatch(b, cx, cy)
                     if dirtAt(tx, ty + 1) then m = m + 4 end
                     if dirtAt(tx - 1, ty) then m = m + 8 end
                     local qd = dq[m]
-                    if qd then b:add(qd, px, py) end
+                    if qd then add(qd, px, py) end
                 end
                 -- Sombra de contacto bajo las paredes que hay justo al norte.
-                if shadow and terrainAt(tx, ty - 1) == WALL then b:add(shadow, px, py) end
+                if shadow and terrainAt(tx, ty - 1) == WALL then add(shadow, px, py) end
             elseif kind == WALL then
                 local m = 0
                 if terrainAt(tx, ty - 1) == WALL then m = m + 1 end
@@ -1204,7 +1218,7 @@ local function buildBatch(b, cx, cy)
                 if terrainAt(tx, ty + 1) == WALL then m = m + 4 end
                 if terrainAt(tx - 1, ty) == WALL then m = m + 8 end
                 local qd = wq[m]
-                if qd then b:add(qd, px, py) end
+                if qd then add(qd, px, py) end
             elseif not ts.liquidAnim then            -- (el animado se dibuja aparte)
                 local m = 0
                 if terrainAt(tx, ty - 1) == LIQUID then m = m + 1 end
@@ -1216,15 +1230,15 @@ local function buildBatch(b, cx, cy)
                 if terrainAt(tx - 1, ty) == LIQUID then m = m + 64 end
                 if terrainAt(tx - 1, ty - 1) == LIQUID then m = m + 128 end
                 local qd = lq[m]
-                if qd then b:add(qd, px, py) end
+                if qd then add(qd, px, py) end
             end
         end
     end
     if b.flush then b:flush() end
 end
 
-local function chunkBatch(cx, cy)
-    local k = ckey(cx, cy)
+local function chunkBatch(cx, cy, sub)
+    local k = ckey(cx, cy) * SUBS + sub
     local now = U.now()
     local e = batches[k]
     if e then e.used = now return e.batch end
@@ -1234,7 +1248,7 @@ local function chunkBatch(cx, cy)
     end
     if not e then
         if #batchList < MAX_BATCHES then
-            e = { key = nil, batch = lg.newSpriteBatch(tileset.img, N * N * 3, 'static'), used = 0 }
+            e = { key = nil, batch = lg.newSpriteBatch(tileset.img, BW * BH * 3, 'static'), used = 0 }
             batchList[#batchList + 1] = e
         else
             e = batchList[1]
@@ -1246,7 +1260,7 @@ local function chunkBatch(cx, cy)
     end
     e.key = k; e.used = now
     batches[k] = e
-    buildBatch(e.batch, cx, cy)
+    buildBatch(e.batch, cx, cy, sub)
     return e.batch
 end
 
@@ -1260,9 +1274,23 @@ function W.drawGround(cam)
     local x0, x1 = floor(l / CW), floor((l + cam.w) / CW)
     local y0, y1 = floor(t / CW), floor((t + cam.h) / CW)
     lg.setColor(1, 1, 1, 1)
+    local r, bt = l + cam.w, t + cam.h
+    local bw, bh = BW * TS, BH * TS
     for cy = y0, y1 do
         for cx = x0, x1 do
-            lg.draw(chunkBatch(cx, cy), cx * CW, cy * CW, 0, SC, SC)
+            for sub = 0, SUBS - 1 do
+                -- Sólo los bloques que tocan la pantalla.
+                local bx = cx * CW + (sub % SUBX) * bw
+                local by = cy * CW + floor(sub / SUBX) * bh
+                if bx < r and bx + bw > l and by < bt and by + bh > t then
+                    local b = chunkBatch(cx, cy, sub)
+                    -- 6 vértices por sprite (spritebatch.cpp); la cuenta global lo sabe.
+                    local n = b.getCount and b:getCount() or 0
+                    if not G_VERT_SPEND or G_VERT_SPEND(n * 6 - 4) then
+                        lg.draw(b, cx * CW, cy * CW, 0, SC, SC)
+                    end
+                end
+            end
         end
     end
 end
@@ -1282,6 +1310,8 @@ function W.drawLiquid(cam, t)
     local l, tp = cam.left(), cam.top()
     local x0, x1 = floor(l / CW), floor((l + cam.w) / CW)
     local y0, y1 = floor(tp / CW), floor((tp + cam.h) / CW)
+    -- Vista con un margen de una baldosa (lo que antes miraba cam.sees).
+    local vl, vr, vt, vb = l - TS, l + cam.w + TS, tp - TS, tp + cam.h + TS
     -- Mar de lava animado (como el mar de Diamante/Perla/Platino): 4 fotogramas.
     local ts = tileset
     if ts and ts.liquidAnim then
@@ -1311,7 +1341,7 @@ function W.drawLiquid(cam, t)
                 end
                 for i = 1, #list, 2 do
                     local x, y = list[i] * TS, list[i + 1] * TS
-                    if cam.sees(x + TS / 2, y + TS / 2, TS) then
+                    if x + TS > vl and x < vr and y + TS > vt and y < vb then
                         local qd = quads[masks[i]]
                         if qd then lg.draw(ts.img, qd, x, y, 0, SC, SC) end
                     end
@@ -1321,16 +1351,28 @@ function W.drawLiquid(cam, t)
     end
     for cy = y0, y1 do
         for cx = x0, x1 do
-            local list = chunkData(cx, cy).liquids
-            for i = 1, #list, 2 do
-                local tx, ty = list[i], list[i + 1]
-                local x, y = tx * TS, ty * TS
-                if cam.sees(x + TS / 2, y + TS / 2, TS) then
-                    local ph = H(tx, ty, 77) * 6.28
-                    local k = (sin(t * speed + ph) + 1) / 2
+            local c = chunkData(cx, cy)
+            local list = c.liquids
+            -- Fase y posición del brillo de cada baldosa (fijas): se calculan una vez.
+            local gl = c.glints
+            if not gl then
+                gl = {}
+                for i = 1, #list, 2 do
+                    local tx, ty = list[i], list[i + 1]
+                    gl[i] = H(tx, ty, 77) * 6.28
+                    gl[i + 1] = floor(H(tx, ty, 78) * 12 + 2) * P
+                    gl[#list + i] = floor(H(tx, ty, 79) * 12 + 2) * P
+                end
+                c.glints = gl
+            end
+            local nl = #list
+            for i = 1, nl, 2 do
+                local x, y = list[i] * TS, list[i + 1] * TS
+                if x + TS > vl and x < vr and y + TS > vt and y < vb then
+                    local k = (sin(t * speed + gl[i]) + 1) / 2
                     lg.setColor(fr, fg, fb, lava and (0.35 + k * 0.5) or k * 0.7)
-                    local sx = x + floor(H(tx, ty, 78) * 12 + 2) * P
-                    local sy = y + floor(H(tx, ty, 79) * 12 + 2) * P
+                    local sx = x + gl[i + 1]
+                    local sy = y + gl[nl + i]
                     lg.rectangle('fill', sx + floor(k * 2 + 0.5) * P, sy, P * (lava and 2 or 3), P)
                     if lava and k > 0.8 then lg.rectangle('fill', sx, sy - P * 2, P, P) end
                     n = n + 1

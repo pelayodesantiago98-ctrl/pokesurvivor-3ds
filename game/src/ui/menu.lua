@@ -56,6 +56,7 @@ local menuIcons = {}
 local function menuIcon(id)
     local im = menuIcons[id]
     if im == nil then
+        if G_STEP then G_STEP("icono de menú " .. id) end
         local ok, r = pcall(lg.newImage, U.img('img/menu/' .. id))
         im = ok and r or false
         if im and im.setFilter then pcall(im.setFilter, im, 'nearest', 'nearest') end
@@ -76,7 +77,9 @@ local function dsText(str, x, y, size, w, col, ink)
     lg.setColor(1, 1, 1, 1)
 end
 function menu.enter()
+    if G_STEP then G_STEP("menu.enter: logros") end
     G.Progress.checkAch()
+    if G_STEP then G_STEP("menu.enter: logros ok") end
     local s = G.DB.save
     G.Sprites.preload({ s.partner }, false)
     -- Arriba, la ficha del compañero (la información va arriba y el menú abajo).
@@ -249,12 +252,12 @@ function dex.draw()
     local sel = dexSel and G.DEX_BY[dexSel]
     local hasSh = dexSel and G.DB.ownsShiny(dexSel)
     local canPick = sel and s.owned[dexSel] and (dexSel ~= s.partner or (hasSh and s.partnerShiny))
-    UI.button("pick", 170, 180, 136, 18, "Elegir de compañero", { size = 10, color = "#1b3a2a", enabled = canPick == true })
+    UI.button("pick", 170, 180, 136, 18, "Elegir de compañero", { size = 10, color = "#3c9c54", enabled = canPick == true })
     UI.button("back", 14, 206, 100, 20, "Volver", { size = 10 })
     if hasSh then
         local isShinyPartner = dexSel == s.partner and s.partnerShiny
         UI.button("pickshiny", 170, 204, 136, 18, isShinyPartner and "Compañero shiny *" or "Elegir shiny *",
-                  { size = 10, color = "#1a2a3a", enabled = not isShinyPartner })
+                  { size = 10, color = "#3c6cc4", enabled = not isShinyPartner })
     end
     coinsLine()
 end
@@ -682,8 +685,9 @@ local function stageInfo()
     end
 end
 function stages.enter()
+    -- Sólo los jefes de la fase que se ve (los de las demás se cargan al elegirla).
     local dexes = {}
-    for _, st in ipairs(G.Stages.LIST) do for _, b in ipairs(st.bosses) do dexes[#dexes + 1] = b.dex end end
+    for _, b in ipairs(G.Stages.LIST[stSel].bosses) do dexes[#dexes + 1] = b.dex end
     G.Sprites.preload(dexes, false)
     stageInfo()
 end
@@ -697,7 +701,7 @@ function stages.draw()
         UI.button("s" .. i, x, y, 148, 34, (cleared and "* " or "") .. st.name, { size = 10, enabled = unlocked, on = i == stSel,
                   color = cleared and "#1b3a2a" or nil })
     end
-    UI.button("go", 170, 206, 140, 22, "Empezar fase", { size = 12, color = "#1b3a2a", enabled = G.Stages.isUnlocked(stSel) })
+    UI.button("go", 170, 206, 140, 22, "Empezar fase", { size = 12, color = "#3c9c54", enabled = G.Stages.isUnlocked(stSel) })
     UI.button("back", 10, 206, 100, 22, "Volver", { size = 10 })
 end
 function stages.touch(x, y)

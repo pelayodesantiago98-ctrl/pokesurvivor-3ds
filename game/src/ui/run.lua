@@ -160,8 +160,23 @@ end
 -- Fondo de la pantalla de movimientos de Platino (muestreado de la captura):
 -- franja oscura arriba, morado de fondo y una Poké Ball grande y tenue en el
 -- centro (mitad de arriba marrón rojiza, mitad de abajo morado más oscuro).
+-- Ya horneado en img/ui/platbg (main.lua --bakebg lo genera con esta misma función):
+-- un dibujo en vez de quince figuras con círculos y arcos.
+local platImg, platTried = nil, false
 function R.platinumBackground(top)
     top = top or 0
+    if top == 0 and not G_BAKING then
+        if not platTried then
+            platTried = true
+            local ok, im = pcall(lg.newImage, U.img("img/ui/platbg"))
+            if ok and im then platImg = im end
+        end
+        if platImg then
+            lg.setColor(1, 1, 1, 1)
+            lg.draw(platImg, 0, 0)
+            return
+        end
+    end
     U.setColor("#706891")
     lg.rectangle("fill", 0, top, W, H - top)
     U.setColor("#525078")
@@ -527,7 +542,7 @@ function pause.draw()
             y = y + 16
         end
     end
-    UI.button("resume", 40, 170, 240, 26, "Continuar", { color = "#1b3a2a", size = 12 })
+    UI.button("resume", 40, 170, 240, 26, "Continuar", { color = "#3c9c54", size = 12 })
     UI.button("quit", 40, 204, 240, 26, "Abandonar run", { color = "#3a1b22", size = 12 })
 end
 function pause.touch(x, y)
@@ -584,7 +599,7 @@ function over.draw()
         y = y + 14
     end
     if r.record then UI.text("¡Nuevo récord de tiempo!", 0, y, { size = 12, color = UI.C.gold, w = W, align = "center" }) end
-    UI.button("back", 60, H - 32, 200, 26, "Volver al menú", { size = 12, color = "#1b3a2a" })
+    UI.button("back", 60, H - 32, 200, 26, "Volver al menú", { size = 12, color = "#3c9c54" })
 end
 function over.touch(x, y)
     if UI.hit(x, y) == "back" and overCb then local cb = overCb; overCb = nil; cb() end

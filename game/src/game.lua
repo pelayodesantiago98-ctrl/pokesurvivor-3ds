@@ -21,6 +21,7 @@ local flashT, flashDur, flashCol = 0, 1, "#ffffff"
 local frameDt = 0
 -- Tickets de esta partida que ya están en la partida guardada (ver bankTickets).
 local banked1, banked10 = 0, 0
+local ticketsDirty, ticketSaveT = false, 60     -- tickets apuntados pero aún no escritos en la SD
 
 G.BIOME_MUSIC = { "forest", "cave", "volcano" }
 
@@ -63,7 +64,7 @@ function Game.startRun(stageIdx)
     G.Events.reset()
     G.Weather.reset()
     G.Path.clear()
-    G.Hazards.clear()
+    G.Hazards.clear(); G.Interact.clear()
     G.Sprites.gc({})
     G.World.reset(math.floor(love.math.random() * 1e6))
     biome = stage and stage.biome or 0
@@ -323,7 +324,10 @@ local function onCollect(p, who)
     if kind == "item" then Game.offerItem(p.value) return end
     if kind == "ticket" or kind == "ticket10" then
         if kind == "ticket" then pl.t1 = pl.t1 + 1 else pl.t10 = pl.t10 + 1 end
-        bankTickets()
+        -- Se guardan luego (Game.frame): escribir en la SD en plena partida daba
+        -- tirones y en la 3DS coincidía con cierres (dos tickets seguidos de un cofre).
+        bankTickets(false)
+        ticketsDirty = true
         G.FX.dmgText(who.x, who.y - who.bodyH - 8, kind == "ticket" and "+1 ticket" or "¡Ticket x10!",
                      kind == "ticket" and "#ffd23f" or "#d9a6ff", true)
         G.FX.ring(who.x, who.y, 6, 50, kind == "ticket" and "#ffd23f" or "#c47bff", 0.4, 3)
@@ -468,6 +472,15 @@ end
 function Game.frame(dt)
     frameDt = (state == "playing") and dt or 0
     handleButtons()
+    -- Tickets cogidos sin guardar: se guardan en cuanto se pausa (o se sube de
+    -- nivel, o se abre un menú) o, como mucho, cada 60 s de partida.
+    if ticketsDirty then
+        ticketSaveT = ticketSaveT - dt
+        if state ~= "playing" or ticketSaveT <= 0 then
+            ticketsDirty, ticketSaveT = false, 60
+            G.DB.commit()
+        end
+    end
     if state == "playing" then update(dt)
     elseif pl and state ~= "ui" then
         G.FX.update(dt * 0.25)

@@ -16,10 +16,21 @@ function test.draw()
     local Q = G.PERSONALITY_TEST
     local q = Q[idx]
     UI.bar(10, 8, W - 20, 5, (idx - 1) / #Q, UI.C.gold)
-    UI.text("Pregunta " .. idx .. " de " .. #Q, 0, 16, { size = 10, color = UI.C.muted, w = W, align = "center" })
-    UI.text(q.q, 12, 32, { size = 12, w = W - 24, align = "center" })
+    -- Con la fuente pixelada propia: se ve igual en el PC y en la 3DS (la fuente del
+    -- sistema de la consola salía diminuta).
+    local PF = G.PixelFont
+    local head = "PREGUNTA " .. idx .. " DE " .. #Q
+    PF.print(head, (W - PF.width(head, 1)) / 2, 18, { s = 1, color = "#e8e4ff", shadow = "#3a3458" })
+    PF.printBlock(q.q, 8, 32, W - 16, { s = 2, gap = 1, color = "#ffffff", shadow = "#3a3458" })
     for i, a in ipairs(q.a) do
-        UI.button("a" .. i, 14, 82 + (i - 1) * 38, W - 28, 32, a.t, { size = 10, on = picked == i })
+        local by = 96 + (i - 1) * 35
+        UI.button("a" .. i, 10, by, W - 20, 31, "", { on = picked == i })
+        local lines = PF.wrap(a.t, 1.5, W - 36, 1)
+        local lh = 12
+        local ty = by + math.floor((31 - #lines * lh + 2) / 2)
+        for k, l in ipairs(lines) do
+            PF.print(l, (W - PF.width(l, 1.5, 1)) / 2, ty + (k - 1) * lh, { s = 1.5, gap = 1, color = "#ffffff", shadow = "#1e3a6e" })
+        end
     end
 end
 local function answer(i)
@@ -60,18 +71,21 @@ function res.draw()
     local trait = result.trait:sub(1, 1):upper() .. result.trait:sub(2)
     UI.text("Tu personalidad es...", 0, 14, { size = 12, color = UI.C.muted, w = W, align = "center" })
     UI.text(trait, 0, 30, { size = 22, color = UI.C.gold, w = W, align = "center" })
-    UI.text(G.TRAIT_TEXT[result.trait] or "", 20, 62, { size = 10, w = W - 40, align = "center" })
+    UI.text(G.TRAIT_TEXT[result.trait] or "", 16, 62, { size = 12, w = W - 32, align = "center" })
     UI.text("Tu compañero: " .. mon.name, 0, 100, { size = 16, w = W, align = "center" })
-    UI.button("ok", 30, 150, 260, 30, "¡Vamos juntos!", { size = 12, color = "#1b3a2a" })
+    UI.button("ok", 30, 150, 260, 30, "¡Vamos juntos!", { size = 12, color = "#3c9c54" })
     UI.button("other", 30, 190, 260, 30, "Elegir otro", { size = 12 })
 end
 local function choose(dex)
+    if G_STEP then G_STEP("elegir inicial " .. tostring(dex)) end
     local save = G.DB.save
     save.starter = dex
     save.partner = dex
     save.personality = result and { trait = result.trait, scores = scores } or nil
     G.DB.grant(dex, "starter")
+    if G_STEP then G_STEP("concedido; guardando") end
     G.DB.commit()
+    if G_STEP then G_STEP("guardado") end
     UI.toast("¡" .. G.DEX_BY[dex].name .. " se une a ti!")
     G.Flow.goMenu()
 end
@@ -122,7 +136,7 @@ function starters.draw()
     local name = picked and G.DEX_BY[picked].name or "Selecciona un Pokémon"
     UI.text(name, 0, 220, { size = 10, color = UI.C.muted, w = 120, align = "left" })
     UI.button("back", 120, 216, 90, 20, "Volver", { size = 10 })
-    UI.button("ok", 216, 216, 90, 20, "Elegir", { size = 10, color = "#1b3a2a", enabled = picked ~= nil })
+    UI.button("ok", 216, 216, 90, 20, "Elegir", { size = 10, color = "#3c9c54", enabled = picked ~= nil })
 end
 function starters.touch(x, y)
     local id = UI.hit(x, y)

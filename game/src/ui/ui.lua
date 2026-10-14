@@ -17,10 +17,12 @@ function UI.font(size)
     local f = fonts[size]
     if f then return f end
     local ok, res
+    if G_STEP then G_STEP("fuente nueva tamaño " .. tostring(size)) end
     if U.CONSOLE then
         -- En consola, fuente del sistema: mkbcfnt no convierte Pixelify Sans (fuente
-        -- variable, saca 2 glifos) y la del sistema trae acentos.
-        ok, res = pcall(lg.newFont, size)
+        -- variable, saca 2 glifos) y la del sistema trae acentos. A igual tamaño se ve
+        -- bastante más pequeña que la Pixelify del PC: se crea 2 puntos mayor.
+        ok, res = pcall(lg.newFont, size + 2)
     else
         ok, res = pcall(lg.newFont, "fonts/pixelify.ttf", size)
     end
@@ -57,6 +59,7 @@ function UI.screen(name) return screens[name] end
 function UI.show(name, data)
     local scr = screens[name]
     if not scr then print("[UI] pantalla desconocida: " .. tostring(name)) return end
+    if G_STEP then G_STEP("UI.show " .. tostring(name)) end
     if current and current.leave then current.leave() end
     current, currentName = scr, name
     G.TopUI.overlay = nil
@@ -103,7 +106,9 @@ end
 function UI.draw()
     nHits = 0
     UI.background()
+    if G_STEP and current and not current.__drawn then G_STEP("dibuja " .. tostring(currentName)) end
     if current and current.draw then current.draw() end
+    if current and not current.__drawn then current.__drawn = true; if G_STEP then G_STEP("dibujada " .. tostring(currentName)) end end
     -- Avisos
     if #toasts > 0 then
         local t = toasts[1]
@@ -202,6 +207,7 @@ end
 -- blanco y dorado alrededor del botón, con un contorno oscuro fino para que se vea
 -- sobre cualquier color, y un brillo suave encima del botón.
 function UI.selectFrame(x, y, w, h)
+    if G_STEP and not UI.__sel then UI.__sel = true; G_STEP("primer marco de selección") end
     local k = (math.sin(U.now() * 6) + 1) / 2
     local r = math.min(7, h / 2)
     lg.setColor(1, 1, 1, 0.06 + 0.08 * k)                    -- brillo sobre el botón

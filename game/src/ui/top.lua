@@ -157,7 +157,12 @@ function T.draw()
     if pl and st ~= "ui" then
         drawRun(pl)
     elseif T.overlay then
+        local first = T.overlay ~= T.__lastOverlay
+        if first and G_STEP then G_STEP("pantalla de arriba: ficha nueva") end
+        T.__trace = first and G_STEP or nil
         T.overlay()
+        T.__trace = nil
+        if first then T.__lastOverlay = T.overlay; if G_STEP then G_STEP("pantalla de arriba: ficha ok") end end
     end
     lg.setFont(font(12))
     lg.setColor(1, 1, 1, 1)
@@ -177,7 +182,10 @@ function T.pokemonCard(dex, opts)
     lg.rectangle("fill", 180, 28, 212, 176, 6, 6)
     U.setColor("#3a5a9a")
     lg.rectangle("line", 180.5, 28.5, 211, 175, 6, 6)
+    local tr = T.__trace
+    if tr then tr("ficha: escenario") end
     G.UI.stage(20, 30, 150, 170, col)
+    if tr then tr("ficha: sprite") end
     local anim = G.UI.menuAnim(dex, 3, shiny)
     if own then
         anim:draw(95, 180, nil)
@@ -188,6 +196,7 @@ function T.pokemonCard(dex, opts)
         U.setColor("#5b83d6")
         lg.printf("?", 20, 100, 150, "center")
     end
+    if tr then tr("ficha: textos") end
     lg.setFont(font(10))
     U.setColor("#8fa3c4")
     lg.print("Nº " .. G.UI.pad3(p.dex) .. " · " .. (G.UI.GEN_NAMES[p.gen] or ""), 190, 34)
@@ -209,6 +218,7 @@ function T.pokemonCard(dex, opts)
         bar("Vida", p.hp, max.hp, tostring(p.hp), 116)
         bar("Ataque", p.atk, max.atk, string.format("x%.2f", p.atk), 132)
         bar("Velocidad", p.spd, max.spd, tostring(p.spd), 148)
+        if tr then tr("ficha: movimientos") end
         local sm = G.Moves.BY_ID[G.startMoveOf(dex)]
         lg.setFont(font(10))
         U.setColor("#eaf2ff")
@@ -229,6 +239,7 @@ function T.pokemonCard(dex, opts)
         U.setColor("#8fa3c4")
         lg.printf("Aún no lo tienes. Consíguelo en el banner de " .. (G.UI.GEN_NAMES[p.gen] or "") .. " o derrotándolo cuando salga shiny.", 190, 100, 190, "left")
     end
+    if tr then tr("ficha: pie") end
     if opts and opts.footer then
         lg.setFont(font(10))
         local fw = font(10):getWidth(opts.footer) + 16

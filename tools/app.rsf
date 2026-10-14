@@ -87,7 +87,9 @@ AccessControlInfo:
   ReleaseKernelMinor            : "33"
   MemoryType                    : Application
   SystemMode                    : 64MB
-  SystemModeExt                 : Legacy
+  # New 3DS: 124 MB en vez de 64 (con 64 se quedaba sin memoria y se cerraba al
+  # entrar en el menú). En la 3DS antigua se ignora y usa el modo de arriba.
+  SystemModeExt                 : 124MB
   CpuSpeed                      : 804MHz
   EnableL2Cache                 : true
   HandleTableSize: 512

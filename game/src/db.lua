@@ -25,6 +25,47 @@ DB.save = nil
 
 local function now() return os.time() end
 
+-- En la 3DS, love.filesystem.write de LÖVE Potion cerraba la consola al guardar por
+-- primera vez (tras «¡Vamos juntos!»). Allí se usa io.open directamente sobre la SD,
+-- que sí funciona (es como se escribe el rastro de depuración).
+local CONSOLE_FILE = love._potion_version and "sdmc:/3ds/pokesurvivor-save.json" or nil
+DB.CONSOLE_FILE = CONSOLE_FILE
+
+local function readSave()
+    if CONSOLE_FILE then
+        local f = io.open(CONSOLE_FILE, "rb")
+        if not f then return nil end
+        local text = f:read("*a")
+        f:close()
+        return text
+    end
+    local ok, text = pcall(love.filesystem.read, FILE)
+    return ok and text or nil
+end
+
+local function writeSave(text)
+    if CONSOLE_FILE then
+        local tmp = CONSOLE_FILE .. ".tmp"
+        local f, err = io.open(tmp, "wb")
+        if not f then return false, err end
+        local okw, werr = f:write(text)
+        f:close()
+        if not okw then return false, werr end
+        -- Se escribe aparte y se cambia de nombre: si se apaga a medias, queda la buena.
+        pcall(os.remove, CONSOLE_FILE)
+        local okc, okr, rerr = pcall(os.rename, tmp, CONSOLE_FILE)
+        if not okc or not okr then
+            -- Sin rename: escribe directamente.
+            f = io.open(CONSOLE_FILE, "wb")
+            if not f then return false, rerr end
+            f:write(text)
+            f:close()
+        end
+        return true
+    end
+    return love.filesystem.write(FILE, text)
+end
+
 function DB.newSave(name)
     return {
         v = DB.VERSION,
@@ -87,7 +128,7 @@ end
 -- Lee la partida del disco (o crea una nueva si no hay o está corrupta).
 function DB.load()
     local s = nil
-    local ok, text = pcall(love.filesystem.read, FILE)
+    local ok, text = pcall(readSave)
     if ok and type(text) == "string" and #text > 0 then
         local ok2, data = pcall(G.JSON.decode, text)
         if ok2 and type(data) == "table" then s = data
@@ -103,12 +144,15 @@ function DB.commit()
     local s = DB.save
     if not s then return false end
     s.updated = now()
+    if G_STEP then G_STEP("guardar: codificando") end
     local ok, text = pcall(G.JSON.encode, s)
     if not ok then print("[DB] no se pudo codificar la partida: " .. tostring(text)) return false end
     -- Las pruebas aceleradas (--soak) no tocan la partida guardada de verdad: sus
     -- opciones (--difficulty, --partner...) y resultados se quedan en memoria.
     if G_SOAK then return true end
-    local ok2, err = love.filesystem.write(FILE, text)
+    if G_STEP then G_STEP("guardar: escribiendo " .. #text .. " bytes") end
+    local okc, ok2, err = pcall(writeSave, text)
+    if not okc then ok2, err = false, ok2 end
     if not ok2 then print("[DB] no se pudo escribir " .. FILE .. ": " .. tostring(err)) return false end
     return true
 end

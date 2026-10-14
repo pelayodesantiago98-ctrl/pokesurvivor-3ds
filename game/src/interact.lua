@@ -80,14 +80,28 @@ local function enemyOn(x, y)
     return false
 end
 
+-- La búsqueda (radio 720, varios trozos del mapa) se repite 5 veces por segundo; lo
+-- de cada objeto, en cada fotograma. Un objeto roto deja de estar en el mapa pero
+-- puede seguir un momento en la lista: se salta (p.gone, lo pone world.lua).
+local near, searchT = {}, 0
+function I.clear()
+    for i = #near, 1, -1 do near[i] = nil end
+    searchT = 0
+end
 function I.update(dt, pl)
     if not pl then return end
-    local near = G.World.specialsNear(pl.x, pl.y, 720)
+    searchT = searchT - dt
+    if searchT <= 0 then
+        searchT = 0.2
+        local found = G.World.specialsNear(pl.x, pl.y, 720)
+        for i = 1, #found do near[i] = found[i] end
+        for i = #near, #found + 1, -1 do near[i] = nil end
+    end
     for i = 1, #near do
         local p = near[i]
-        local t = p.type
+        local t = (not p.gone) and p.type or nil
         local py = (t == 'spring' or t == 'trap') and p.y - 8 or p.y
-        local d2 = U.dist2(pl.x, pl.y, p.x, py)
+        local d2 = t and U.dist2(pl.x, pl.y, p.x, py) or 0
         if t == 'spring' then
             spring(dt, pl, p, d2)
         elseif t == 'altar' then

@@ -51,6 +51,36 @@ local function sheetKey(dex, full, shiny)
     return tostring(dex)
 end
 
+-- Límite de hojas cargadas a la vez. En la 3DS la memoria de texturas es poca: los
+-- menús (Pokédex, fases...) cargaban cientos de hojas sin soltarlas; al llenarse,
+-- newImage fallaba en cada fotograma (2 fps) y la siguiente textura que no se
+-- comprobaba (efectos de un cofre...) cerraba la consola. Se sueltan las que llevan
+-- más tiempo sin dibujarse (nunca las del último medio segundo).
+local MAX_SHEETS = 40
+local nSheets = 0
+local failed = {}                            -- key -> hora del último fallo (no reintentar cada fotograma)
+local getTime = love.timer.getTime
+
+local function release(key, sh)
+    if sh.img.release then pcall(sh.img.release, sh.img) end
+    sheets[key] = nil
+    nSheets = nSheets - 1
+end
+
+-- Suelta las hojas sin usar desde hace `age` s, de la más vieja a la más nueva, hasta
+-- dejar `target` (o todas las que se pueda si target es 0).
+local function evict(target, age)
+    local now, list = getTime(), {}
+    for key, sh in pairs(sheets) do
+        if now - sh.used > age then list[#list + 1] = key end
+    end
+    table.sort(list, function(a, b) return sheets[a].used < sheets[b].used end)
+    for i = 1, #list do
+        if nSheets <= target then break end
+        release(list[i], sheets[list[i]])
+    end
+end
+
 local function loadSheet(dex, full, shiny)
     local d = data(dex)
     if not d then return nil end
@@ -58,14 +88,25 @@ local function loadSheet(dex, full, shiny)
     if full and not d.full then full = false end
     local key = sheetKey(dex, full, shiny)
     local sh = sheets[key]
-    if sh then return sh end
+    if sh then sh.used = getTime() return sh end
     local set = setFor(d, full, shiny)
     if not set then return nil end
+    if failed[key] and getTime() - failed[key] < 3 then return nil end
+    if nSheets >= MAX_SHEETS then evict(MAX_SHEETS - 8, 0.5) end
+    if G_PRINT_STEPS and G_STEP then G_STEP("hoja de sprites " .. tostring(set.atlas)) end
     local ok, img = pcall(lg.newImage, U.img(set.atlas))
     if not ok or not img then
+        -- Sin memoria: suelta todo lo que no se esté dibujando y prueba otra vez.
+        evict(0, 0.5)
+        ok, img = pcall(lg.newImage, U.img(set.atlas))
+    end
+    if not ok or not img then
+        failed[key] = getTime()
+        if G_STEP then G_STEP("FALLO al cargar " .. tostring(set.atlas) .. " (" .. nSheets .. " hojas cargadas)") end
         print("[Sprites] no se pudo cargar " .. set.atlas .. ": " .. tostring(img))
         return nil
     end
+    failed[key] = nil
     if img.setFilter then pcall(img.setFilter, img, "nearest", "nearest") end
     -- Cuadros por animación (fila-mayor). Cada fotograma está recortado a su
     -- caja opaca: ox/oy corrigen el ancla.
@@ -85,8 +126,9 @@ local function loadSheet(dex, full, shiny)
         anims[name] = { w = a.w, h = a.h, n = n, rows = a.rows, ax = a.ax, ay = a.ay, d = a.d,
                         quads = quads, ox = ox, oy = oy }
     end
-    sh = { img = img, anims = anims, full = full and d.full ~= nil, used = U.now() }
+    sh = { img = img, anims = anims, full = full and d.full ~= nil, used = getTime() }
     sheets[key] = sh
+    nSheets = nSheets + 1
     return sh
 end
 
@@ -134,14 +176,11 @@ function S.gc(keep, keepFull)
         local dex = tonumber(key:match("^(%d+)"))
         local isFull = key:sub(-2) == "_f"
         local wanted = isFull and (keepFull and keepFull[dex]) or (not isFull and set[dex])
-        if not wanted then
-            if sh.img.release then pcall(sh.img.release, sh.img) end
-            sheets[key] = nil
-        end
+        if not wanted then release(key, sh) end
     end
 end
 
-function S.loadedCount() return U.count(sheets) end
+function S.loadedCount() return nSheets end
 
 -- Ángulo de pantalla (atan2(dy,dx)) -> fila de dirección 0..7.
 function S.dirFromAngle(a)
