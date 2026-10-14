@@ -21,8 +21,10 @@ end
 
 local function own(s)
     local n = 0
+    local by = G.DEX_BY
     for k in pairs(s.owned or {}) do
-        if G.DEX_BY[tonumber(k)] then n = n + 1 end
+        -- (claves numéricas: sin tonumber, que en Lua 5.1 cuesta)
+        if by[type(k) == "number" and k or tonumber(k)] then n = n + 1 end
     end
     return n
 end
@@ -97,7 +99,12 @@ A.LIST = LIST
 
 -- Un logro por legendario (con sprite): "Vence a Mewtwo"...
 local function legendValue(dex)
-    return function(s) if hasKey(s.legends, dex) then return 1 end return 0 end
+    local ks = tostring(dex)          -- (hecho una vez, no en cada comprobación)
+    return function(s)
+        local t = s.legends
+        if t and (t[dex] ~= nil or t[ks] ~= nil) then return 1 end
+        return 0
+    end
 end
 local totalLegends = 0
 for i = 1, #G.DEX do

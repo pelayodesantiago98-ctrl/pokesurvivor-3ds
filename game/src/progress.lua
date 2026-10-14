@@ -50,9 +50,16 @@ local function isoWeek(y, m, d)
     return ty, week
 end
 
+-- Se calcula como mucho una vez cada 30 s (os.time de la última vez): el menú
+-- principal pregunta cada fotograma (P.pending -> P.ensure) y os.date + isoWeek
+-- (tres os.time/os.date y varios textos) eran caros en la 3DS.
 local ids = { d = '', w = '' }
+local idsAt = nil
 function P.periodIds()
-    local t = os.date("*t")
+    local now = os.time()
+    if idsAt and now >= idsAt and now - idsAt < 30 then return ids end
+    idsAt = now
+    local t = os.date("*t", now)
     local wy, ww = isoWeek(t.year, t.month, t.day)
     ids.d = 'd' .. t.year .. p2(t.month) .. p2(t.day)
     ids.w = 'w' .. wy .. '-' .. p2(ww)
@@ -198,15 +205,26 @@ end
 
 -- ---------------- logros ----------------
 
+-- Valores ya calculados en esta pasada de checkAch: varios logros comparten la
+-- misma función (siete miran cuántos Pokémon tienes, recorriendo `owned` entero).
+local achMemo = {}
 function P.checkAch()
     local s = G.DB.save
     if not s then return end
     achT = U.now()
     s.ach = s.ach or {}
     local list = G.AchDefs.LIST
+    local memo = achMemo
+    for k in pairs(memo) do memo[k] = nil end
     for i = 1, #list do
         local a = list[i]
-        if not s.ach[a.id] and a.value(s) >= a.goal then
+        local v
+        if not s.ach[a.id] then
+            local f = a.value
+            v = memo[f]
+            if v == nil then v = f(s); memo[f] = v end
+        end
+        if v and v >= a.goal then
             s.ach[a.id] = os.time()
             P.grant(a.reward)
             notify('¡Logro: ' .. a.name .. '!', a.title and ('Nuevo título: ' .. a.title) or '', a)

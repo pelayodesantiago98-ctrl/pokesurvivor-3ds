@@ -105,10 +105,14 @@ local MAP = {
 }
 
 -- Recorre la cadena UTF-8 devolviendo los glifos (cacheado por texto).
-local cache = {}
+-- (Como mucho 400 textos: los que cambian, como contadores o tiempos, no la hacen
+-- crecer sin fin; al pasarse se vacía.)
+local cache, nCache = {}, 0
 local function glyphsOf(text)
     local g = cache[text]
     if g then return g end
+    nCache = nCache + 1
+    if nCache > 400 then cache, nCache = {}, 1 end
     g = {}
     local i, n = 1, #text
     while i <= n do
@@ -244,10 +248,19 @@ end
 
 -- Cartel de zona: banda oscura translúcida (se ve el mapa) con el nombre centrado.
 -- Parte `text` en líneas que quepan en `maxw` píxeles (cortando por espacios).
-local wrapCache = {}
+-- Caché por texto y, dentro, por (escala, ancho, separación) en un número: sin
+-- montar una clave de texto en cada llamada. Como mucho 200 textos.
+local wrapCache, nWrap = {}, 0
 function PF.wrap(text, s, maxw, gap)
-    local key = text .. "|" .. tostring(s) .. "|" .. maxw .. "|" .. tostring(gap)
-    local out = wrapCache[key]
+    local byT = wrapCache[text]
+    if not byT then
+        nWrap = nWrap + 1
+        if nWrap > 200 then wrapCache, nWrap = {}, 1 end
+        byT = {}
+        wrapCache[text] = byT
+    end
+    local key = (maxw * 1000 + (s or 2) * 100) * 100 + (gap or 99)
+    local out = byT[key]
     if out then return out end
     out = {}
     local line = ""
@@ -261,7 +274,7 @@ function PF.wrap(text, s, maxw, gap)
         end
     end
     if line ~= "" then out[#out + 1] = line end
-    wrapCache[key] = out
+    byT[key] = out
     return out
 end
 
