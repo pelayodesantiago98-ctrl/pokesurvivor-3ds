@@ -181,7 +181,12 @@ function S.preloadSoon(dexes, full, shiny)
 end
 -- Carga como mucho UNA hoja por fotograma; las que ya estaban cargadas (o no
 -- existen) se saltan sin gastar el fotograma.
+-- Y como mucho una cada STEP_GAP s: en la 3DS cada carga es un fotograma de ~40 ms
+-- más; seguidas se notaban como un corte, separadas apenas.
+local STEP_GAP, lastStep = 0.2, -1
 function S.step()
+    local now = getTime()
+    if now - lastStep < STEP_GAP then return end
     while qHead <= qTail do
         local d, full, shiny = qDex[qHead], qFull[qHead], qShiny[qHead]
         qDex[qHead], qFull[qHead], qShiny[qHead] = nil, nil, nil
@@ -194,6 +199,7 @@ function S.step()
             if shiny and not dd.shiny then shiny = false end
             if not sheets[sheetKey(d, full, shiny)] then
                 loadSheet(d, full, shiny)
+                lastStep = now
                 break
             end
         end

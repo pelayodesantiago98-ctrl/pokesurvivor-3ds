@@ -283,7 +283,10 @@ function hud.draw()
         -- (A la SD ya: la imagen del HUD aún no está probada en la consola.)
         if G_STEP then G_STEP("hud: creando imagen", true) end
         local ok, cv = false, nil
-        if not G_NO_HUD_CANVAS then ok, cv = pcall(lg.newCanvas, W, H) end
+        -- En la 3DS la imagen se crea, pero al pintar en ella la pantalla de abajo
+        -- parpadeaba y salía en la de arriba (y la partida se cerró poco después):
+        -- allí se dibuja el HUD en directo como antes. No usar Canvas en la consola.
+        if not G_NO_HUD_CANVAS and not G_IS_CONSOLE and not love._potion_version then ok, cv = pcall(lg.newCanvas, W, H) end
         if ok and cv then hudCv = cv end
         if G_STEP then G_STEP("hud: imagen " .. (hudCv and "ok" or "no disponible"), true) end
     end

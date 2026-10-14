@@ -59,6 +59,7 @@ G_TRACE = trace
 -- últimos pasos anotados con G_STEP) se escribe en sdmc:/pokesurvivor-error.txt.
 local IS_CONSOLE = love._potion_version ~= nil
     or (love.system and love.system.getOS and love.system.getOS() == "Horizon")
+G_IS_CONSOLE = IS_CONSOLE
 local steps = {}
 -- En consola los pasos van a sdmc:/pokesurvivor-trace.txt, pero escribir en la SD
 -- cuesta ~20 ms: cada paso se guarda en memoria y se escribe todo junto (abrir,

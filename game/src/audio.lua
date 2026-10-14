@@ -174,11 +174,9 @@ function A.preload()
 end
 local function preloadStep(dt)
     if qHead > #queue then return end
-    if G.Game and G.Game.state and G.Game.state() == "playing" then
-        qWait = qWait - dt
-        if qWait > 0 then return end
-        qWait = PRELOAD_GAP
-    end
+    -- Jugando no se carga nada: en la 3DS cada WAV es un tirón. Lo que falte lo
+    -- carga A.finishPreload al empezar la partida.
+    if G.Game and G.Game.state and G.Game.state() ~= "ui" then return end
     -- Salta los que ya estén cargados (sonaron antes de llegar a ellos).
     while qHead <= #queue and pools[queue[qHead]] ~= nil do qHead = qHead + 1 end
     if qHead > #queue then return end
@@ -218,6 +216,21 @@ local function startMusic(name)
     cur = { name = name, src = src, vol = 0 }
     pcall(src.setVolume, src, 0)
     pcall(src.play, src)
+end
+
+-- Al empezar una partida (ya es un momento de carga): los efectos que falten y la
+-- música de jefe, para que nada se cargue a mitad de partida.
+function A.finishPreload()
+    if not hasAudio then return end
+    while qHead <= #queue do
+        local f = queue[qHead]
+        qHead = qHead + 1
+        if pools[f] == nil then pcall(getPool, f) end
+    end
+    if musicSrc.boss == nil then
+        local ok, src = pcall(loadMusic, "boss")
+        musicSrc.boss = ok and src or false
+    end
 end
 
 -- Música: music("village" | "forest" | "cave" | "volcano" | "boss" | "rift" | nil)

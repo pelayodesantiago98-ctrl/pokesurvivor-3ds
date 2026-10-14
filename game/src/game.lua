@@ -105,6 +105,7 @@ function Game.startRun(stageIdx)
     G.Sprites.preload({ mon.dex }, true)
     if pl.shiny then G.Sprites.preload({ mon.dex }, false, true) end
     G.Spawner.reset()
+    G.Audio.finishPreload()
     G.Audio.music(G.BIOME_MUSIC[(biome % #G.BIOME_MUSIC) + 1])
     deathT = 0
     state = "playing"
