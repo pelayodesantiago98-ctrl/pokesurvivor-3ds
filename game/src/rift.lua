@@ -40,6 +40,8 @@ local checkT, asked, downT = CHECK, false, 0
 local misses = 0           -- intentos seguidos sin grieta (cada uno la hace más probable)
 local nextType = nil       -- pruebas/vídeos: tipo de la próxima arena
 local legendPool = nil     -- legendarios con sprite (se calcula una vez)
+local preMon, preType = nil, nil   -- legendario sorteado al abrirse la grieta
+local preDex = {}
 
 -- Clima de cada arena (como ARENA_THEMES[type].weather en tiles.js). Si
 -- data/tiles.lua trae G.Tiles.ARENA_THEMES, se usa ese.
@@ -53,15 +55,33 @@ local function TS() return ((G.Tiles and G.Tiles.T) or 16) * G.Sprites.PX end
 function R.reset()
     rift = nil; arena = nil
     checkT = CHECK; asked = false; downT = 0; misses = 0
+    preMon, preType = nil, nil
+end
+
+--- Marca en `keep` la hoja del legendario que espera en la grieta abierta (para que
+--- el spawner no la suelte antes de entrar).
+function R.keepDex(keep)
+    if rift and preMon then keep[preMon.dex] = true end
 end
 
 -- ---------------- grieta en el mapa ----------------
 
 local PX_OPTS = { vy = -40, life = 0.6 }
 
+local choose   -- (definida abajo)
+
 local function show(x, y, ttl)
     rift = { x = x, y = y, ttl = ttl, t = 0 }
     asked = false
+    -- Se sortea ya el legendario y su hoja se carga mientras llegas (en la 3DS,
+    -- ~40 ms; al entrar ya hay bastante: bioma de la arena, clima...).
+    if not nextType then
+        preMon, preType = choose(nil)
+        if preMon then
+            preDex[1] = preMon.dex
+            G.Sprites.preloadSoon(preDex, false)
+        end
+    end
     -- (El aviso grande lo dibuja la interfaz mientras rift.t < 4,5 s.)
     G.Audio.sfx('rift')
     G.FX.ring(x, y, 6, 80, '#b48aff', 0.7, 5)
@@ -172,13 +192,10 @@ local function spawnLegend()
     G.Audio.sfx('boss')
 end
 
--- Elige legendario y lugar, y empieza.
-start = function(forceType)
-    if arena then return end
-    forceType = forceType or nextType
-    nextType = nil
+-- Elige legendario y arena: mon, type (o nil si no hay ninguno).
+choose = function(forceType)
     local list = pool(forceType)
-    if #list == 0 then return end
+    if #list == 0 then return nil end
     -- Los legendarios que aún no has vencido salen 4 veces más (menos repetidos).
     -- (Las claves de `legends` pueden ser números o textos si vienen del JSON.)
     local beaten = (G.DB.save and G.DB.save.legends) or {}
@@ -202,6 +219,20 @@ start = function(forceType)
         local types = G.Tiles and G.Tiles.ARENA_TYPES
         if types and not U.contains(types, type) then type = 'normal' end
     end
+    return mon, type
+end
+
+-- Elige legendario y lugar, y empieza.
+start = function(forceType)
+    if arena then return end
+    forceType = forceType or nextType
+    nextType = nil
+    local mon, type
+    -- El que se sorteó al abrirse la grieta (su hoja ya se ha ido cargando).
+    if preMon and not forceType then mon, type = preMon, preType
+    else mon, type = choose(forceType) end
+    preMon, preType = nil, nil
+    if not mon then return end
     local cfg = {
         tx = 5000 + floor(random() * 3000), ty = 5000 + floor(random() * 3000), r = ARENA_R,
         dex = mon.dex, shiny = G.Sprites.hasShiny(mon.dex) and random() < 1 / 512,
@@ -321,7 +352,7 @@ function drawableT.draw()
     local h = 60 + f * 3
     local x, y = r.x, r.y
     U.setColor('#7b3cff', 0.25 * a)
-    lg.ellipse("fill", x, y, 34, 12)
+    G.Sprites.ellipse(x, y, 34, 12)
     poly[1], poly[2] = x - 7, y - h * 0.5
     poly[3], poly[4] = x + 1, y - h
     poly[5], poly[6] = x + 9, y - h * 0.55

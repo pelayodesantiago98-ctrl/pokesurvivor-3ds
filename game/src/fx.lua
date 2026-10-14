@@ -394,7 +394,7 @@ local function drawRing(r)
     local rad = r.r0 + (r.r1 - r.r0) * k
     lg.setLineWidth(r.width >= 4 and PX * 2 or PX)
     U.setColor(r.color, step(1 - k))
-    lg.ellipse("line", snap(r.x), snap(r.y), rad, rad * 0.9)
+    G.Sprites.ellipseLine(snap(r.x), snap(r.y), rad, rad * 0.9)
 end
 
 -- Cruz de píxeles del shiny (port de G.Icons.twinkle de la web).
@@ -467,7 +467,9 @@ function F.draw()
                 local k = 1 - tx.t / tx.life
                 local alpha = min(1, k * 2.2)
                 local sc = tx.big and base * 1.5 or base
-                local w = font:getWidth(tx.s) * sc
+                -- (El ancho del texto se mide una vez, no en cada fotograma.)
+                if tx.wf ~= font or tx.ws ~= tx.s then tx.wf, tx.ws, tx.w = font, tx.s, font:getWidth(tx.s) end
+                local w = tx.w * sc
                 local x, y = U.snap(tx.x - w / 2), U.snap(tx.y - fh * sc)
                 local o = base                                   -- 1 píxel de pantalla
                 lg.setColor(0, 0, 0, 0.75 * alpha)

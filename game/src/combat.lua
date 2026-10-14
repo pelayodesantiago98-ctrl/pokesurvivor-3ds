@@ -553,36 +553,37 @@ local drawOpts = {}
 -- Lo de los campos que va en el suelo (debajo de los Pokémon).
 function C.drawGroundFields()
     local now = U.now()
+    local ell, ellLine = G.Sprites.ellipse, G.Sprites.ellipseLine   -- (textura y contorno con menos tramos)
     for i = 1, #fields do
         local f = fields[i]
         if G.Camera.sees(f.x, f.y, 60) then
             if f.kind == 'patch' then
                 local a = min(1, (f.life - f.t) * 2, f.t * 6)
                 U.setColor(f.col, 0.32 * a)
-                lg.ellipse('fill', f.x, f.y, f.r, f.r * 0.62)
+                ell(f.x, f.y, f.r, f.r * 0.62)
                 U.setColor(f.col, 0.5 * a)
                 lg.setLineWidth(1.5)
-                lg.ellipse('line', f.x, f.y, f.r * 0.8, f.r * 0.5)
+                ellLine(f.x, f.y, f.r * 0.8, f.r * 0.5)
                 lg.setLineWidth(1)
             elseif f.kind == 'mine' then
                 local armed = f.t >= f.arm
                 local blink = armed and sin(now * 8 + f.x) > 0.3
                 U.setColor(f.col, 0.18)
-                lg.ellipse('fill', f.x, f.y, f.r * 0.45, f.r * 0.28)
+                ell(f.x, f.y, f.r * 0.45, f.r * 0.28)
                 lg.setColor(1, 1, 1, 1)
                 drawOpts.scale = 1; drawOpts.alpha = blink and 1 or 0.75; drawOpts.frame = 0; drawOpts.angle = 0
                 G.VFX.draw(f.vis.proj, f.vis.pal, f.x, f.y - 4, drawOpts)
             elseif f.kind == 'meteor' then
                 local k = U.clamp(f.t / f.fall, 0, 1)
                 lg.setColor(0, 0, 0, 0.2 + k * 0.3)
-                lg.ellipse('fill', f.x, f.y, f.r * (0.3 + k * 0.7), f.r * 0.6 * (0.3 + k * 0.7))
+                ell(f.x, f.y, f.r * (0.3 + k * 0.7), f.r * 0.6 * (0.3 + k * 0.7))
                 U.setColor(f.col, 0.6)
                 lg.setLineWidth(1.5)
-                lg.ellipse('line', f.x, f.y, f.r, f.r * 0.6)
+                ellLine(f.x, f.y, f.r, f.r * 0.6)
                 lg.setLineWidth(1)
             elseif f.kind == 'turret' then
                 lg.setColor(0, 0, 0, 0.3)
-                lg.ellipse('fill', f.x, f.y, 11, 4.5)
+                ell(f.x, f.y, 11, 4.5)
             end
         end
     end

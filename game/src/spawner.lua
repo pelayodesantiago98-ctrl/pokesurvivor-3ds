@@ -99,6 +99,16 @@ local function gcSprites(pl, t)
     for k in pairs(keepFull) do keepFull[k] = nil end
     keep[pl.dex] = true
     keepFull[pl.dex] = true
+    -- La evolución ya precargada (Evolution.update, 2 niveles antes): antes se soltaba
+    -- aquí y al evolucionar se volvía a cargar de golpe (otro tirón).
+    if pl._preloadEvo and pl._evoNext then
+        keep[pl._evoNext] = true
+        keepFull[pl._evoNext] = true
+    end
+    -- Y las de los eventos y la grieta (el Pokémon perdido se soltaba y se recargaba
+    -- cada 10 s; lo sorteado por adelantado se soltaba antes de salir).
+    if G.Events and G.Events.keepDex then G.Events.keepDex(keep) end
+    if G.Rift and G.Rift.keepDex then G.Rift.keepDex(keep) end
     local stage = G.Stages.active()
     local up = stage and G.Stages.upcomingDex(t, 60) or G.Enemies.upcomingDex(t, 60)
     for i = 1, #up do keep[up[i]] = true end

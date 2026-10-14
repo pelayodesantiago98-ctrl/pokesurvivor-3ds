@@ -546,14 +546,14 @@ function Player:draw()
     if m and not self.dead then
         U.setColor(U.TYPE_COLOR[m.type], 0.22)
         lg.setLineWidth(2)
-        lg.ellipse('line', self.x, self.y, self.r * 1.5, self.r * 0.6)
+        G.Sprites.ellipseLine(self.x, self.y, self.r * 1.5, self.r * 0.6)
     end
     G.Sprites.drawShadow(self.dex, self.x, self.y)
     -- Poder de altar: aro de su color latiendo bajo los pies.
     if self.power and not self.dead then
         U.setColor(self.power.def.color, 0.35 + sin(U.now() / 0.12) * 0.15)
         lg.setLineWidth(3)
-        lg.ellipse('line', self.x, self.y, self.r * 2.1, self.r * 0.85)
+        G.Sprites.ellipseLine(self.x, self.y, self.r * 2.1, self.r * 0.85)
     end
 
     local alpha = 1
@@ -576,7 +576,8 @@ function Player:draw()
             lg.push()
             lg.translate(self.x, self.y)
             lg.scale(1, 0.42)
-            lg.arc('line', 'open', 0, 0, R, 0, 6.2832 * (b.n / 5))
+            -- (Con los tramos justos, como G.Sprites.ellipseLine: cada tramo son 6 vértices.)
+            lg.arc('line', 'open', 0, 0, R, 0, 6.2832 * (b.n / 5), max(3, floor(3.2 * math.sqrt(R * 0.5) * b.n / 5)))
             lg.pop()
             i = i + 1
         end

@@ -62,6 +62,7 @@ local failed = {}                            -- key -> hora del último fallo (n
 local getTime = love.timer.getTime
 
 local function release(key, sh)
+    sh.dead = true                           -- (los animadores que la guardan la vuelven a pedir)
     if sh.img.release then pcall(sh.img.release, sh.img) end
     sheets[key] = nil
     nSheets = nSheets - 1
@@ -162,19 +163,47 @@ end
 -- Igual, pero poco a poco: una hoja por fotograma (S.step). En la 3DS cada hoja
 -- tarda ~40 ms en cargarse; cargar las de todo el minuto siguiente de golpe daba
 -- tirones de medio segundo en mitad de la partida.
-local queue = {}
+-- Cola en listas paralelas (sin una tabla por entrada) y sin repetidos: cada 10 s
+-- el spawner vuelve a pedir lo del minuto siguiente y antes se encolaba otra vez
+-- todo lo que aún no había dado tiempo a cargar.
+local qDex, qFull, qShiny, qHead, qTail = {}, {}, {}, 1, 0
+local queued = {}                            -- clave de hoja -> true si está en la cola
 function S.preloadSoon(dexes, full, shiny)
     for i = 1, #dexes do
         local d = dexes[i]
-        if not sheets[sheetKey(d, full, shiny)] then queue[#queue + 1] = { d, full, shiny } end
+        local key = sheetKey(d, full, shiny)
+        if not sheets[key] and not queued[key] then
+            queued[key] = true
+            qTail = qTail + 1
+            qDex[qTail], qFull[qTail], qShiny[qTail] = d, full or false, shiny or false
+        end
     end
 end
+-- Carga como mucho UNA hoja por fotograma; las que ya estaban cargadas (o no
+-- existen) se saltan sin gastar el fotograma.
 function S.step()
-    local q = table.remove(queue, 1)
-    if q then loadSheet(q[1], q[2], q[3]) end
+    while qHead <= qTail do
+        local d, full, shiny = qDex[qHead], qFull[qHead], qShiny[qHead]
+        qDex[qHead], qFull[qHead], qShiny[qHead] = nil, nil, nil
+        qHead = qHead + 1
+        queued[sheetKey(d, full, shiny)] = nil
+        local dd = data(d)
+        if dd then
+            -- (Sin atlas completo o shiny se usa el normal: la clave que se cargaría.)
+            if full and not dd.full then full = false end
+            if shiny and not dd.shiny then shiny = false end
+            if not sheets[sheetKey(d, full, shiny)] then
+                loadSheet(d, full, shiny)
+                break
+            end
+        end
+    end
+    if qHead > qTail then qHead, qTail = 1, 0 end
 end
 function S.clearQueue()
-    for i = #queue, 1, -1 do queue[i] = nil end
+    for i = qHead, qTail do qDex[i], qFull[i], qShiny[i] = nil, nil, nil end
+    qHead, qTail = 1, 0
+    for k in pairs(queued) do queued[k] = nil end
 end
 
 -- Descarga las hojas que no estén en keep ({dex=true} o lista). Las "full" se
@@ -220,14 +249,59 @@ function S.bodyHeight(dex, scale)
     return (m and m.iay or 24) * S.PX * (scale or 1)
 end
 
+-- Elipses rellenas con una textura (img/ellipse.png, elipse blanca de 128×64 sin
+-- suavizar) en vez de lg.ellipse: en la 3DS una elipse son ~20-30 vértices que se
+-- calculan uno a uno en la CPU, y la textura es un solo cuadro (4). Se ve igual:
+-- el borde es tan duro como el del polígono. Con el color que esté puesto.
+local ellImg, ellFailed = nil, false
+local function ellipseImg()
+    if ellImg or ellFailed then return ellImg end
+    local ok, img = pcall(lg.newImage, U.img("img/ellipse"))
+    if ok and img then
+        if img.setFilter then pcall(img.setFilter, img, "nearest", "nearest") end
+        ellImg = img
+    else
+        ellFailed = true
+    end
+    return ellImg
+end
+S.ellipseImg = ellipseImg
+
+local ELL_W, ELL_H = 128, 64
+function S.ellipse(x, y, rx, ry)
+    if rx <= 0 or ry <= 0 then return end
+    local img = ellImg or ellipseImg()
+    if img then
+        lg.draw(img, x - rx, y - ry, 0, rx * 2 / ELL_W, ry * 2 / ELL_H)
+    else
+        lg.ellipse("fill", x, y, rx, ry)
+    end
+end
+
+-- Contorno de elipse con los tramos justos: LÖVE Potion calcula los tramos con el
+-- radio en unidades de MUNDO (sqrt(r·20)), pero la cámara dibuja a escala 0,5 y
+-- con la mitad (π·sqrt(r en píxeles)) el error queda por debajo de medio píxel.
+-- Cada tramo de una línea son 6 vértices: así cuesta la mitad.
+local sqrt, floor = math.sqrt, math.floor
+function S.ellipseLine(x, y, rx, ry)
+    local n = floor(3.2 * sqrt((rx + ry) * 0.25)) -- (rx+ry)/2 · escala 0,5
+    if n < 8 then n = 8 end
+    lg.ellipse("line", x, y, rx, ry, n)
+end
+
 -- Sombra elíptica bajo los pies, tamaño según el ShadowSize de PMD.
 local SHADOW_R = { [0] = 5, 8, 12 }
-function S.drawShadow(dex, x, y, scale)
+-- Radio horizontal de la sombra (el vertical es 0,42 de éste).
+function S.shadowRadius(dex, scale)
     local m = DEXMETA[dex]
     local s = m and m.s or 1
-    local rx = SHADOW_R[U.clamp(s, 0, 2)] * S.PX * (scale or 1)
+    if s < 0 then s = 0 elseif s > 2 then s = 2 end
+    return SHADOW_R[s] * S.PX * (scale or 1)
+end
+function S.drawShadow(dex, x, y, scale)
+    local rx = S.shadowRadius(dex, scale)
     lg.setColor(0, 0, 0, 0.34)
-    lg.ellipse("fill", x, y, rx, rx * 0.42)
+    S.ellipse(x, y, rx, rx * 0.42)
     lg.setColor(1, 1, 1, 1)
 end
 
@@ -293,8 +367,15 @@ function Animator:_start(anim, once)
 end
 
 function Animator:update(dt)
-    local m = S.animMeta(self.dex, self.cur, self.full, self.shiny)
-    if not m or self.done then return end
+    if self.done then return end
+    -- Geometría de la animación actual, guardada mientras no cambie (antes se buscaba
+    -- cada fotograma, hasta 4 consultas por Pokémon).
+    local m = self._meta
+    if self._mcur ~= self.cur then
+        m = S.animMeta(self.dex, self.cur, self.full, self.shiny)
+        self._meta, self._mcur = m, self.cur
+    end
+    if not m then return end
     self.t = self.t + dt * 60 * self.speed
     local d = m.d
     while self.t >= d[self.frame + 1] do
@@ -314,7 +395,15 @@ end
 
 -- Dibuja con los pies en (x, y). opts: { flash, alpha, color }
 function Animator:draw(x, y, opts)
-    local sh = loadSheet(self.dex, self.full, self.shiny)
+    -- La hoja se guarda en el animador mientras siga cargada (sin buscarla por su
+    -- clave de texto en cada dibujo).
+    local sh = self._sh
+    if sh and not sh.dead then
+        sh.used = getTime()
+    else
+        sh = loadSheet(self.dex, self.full, self.shiny)
+        self._sh = sh
+    end
     local k = S.PX * self.scale
     local alpha = (opts and opts.alpha) or 1
     if alpha <= 0 then return end
@@ -343,13 +432,16 @@ function Animator:draw(x, y, opts)
     -- Las anclas de SpriteCollab son medias (15,5): se redondea la esquina del
     -- dibujo a píxel entero para que no se cuelen texels de los fotogramas vecinos.
     local qw = a.qw[idx]
+    -- (Como U.snap, con la escala de la cámara leída una vez.)
+    local cam = G.Camera
+    local u = 1 / ((cam and cam.scale) or 0.5)
     local px, py
     if FLIP[dir] then
-        px = U.snap(x - (qw - ax) * k) + qw * k
+        px = floor((x - (qw - ax) * k) / u + 0.5) * u + qw * k
     else
-        px = U.snap(x - ax * k)
+        px = floor((x - ax * k) / u + 0.5) * u
     end
-    py = U.snap(y - ay * k)
+    py = floor((y - ay * k) / u + 0.5) * u
     local sx = FLIP[dir] and -k or k
     if opts and opts.reflect then
         -- Reflejo en el agua (Negro/Blanco): volteado en vertical desde los pies.

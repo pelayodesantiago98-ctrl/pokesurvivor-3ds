@@ -161,17 +161,18 @@ function P.draw()
     local L = G.LIFT
     local cam = G.Camera
     local n = #list
+    local ell = G.Sprites.ellipse            -- elipse con textura (4 vértices)
     -- Sombras primero, todas juntas.
     lg.setColor(0, 0, 0, 0.25)
     for i = 1, n do
         local p = list[i]
-        if cam.sees(p.x, p.y, 40) then lg.ellipse("fill", p.x, p.y, p.r * 0.9, p.r * 0.38) end
+        if cam.sees(p.x, p.y, 40) then ell(p.x, p.y, p.r * 0.9, p.r * 0.38) end
     end
     -- Los disparos enemigos llevan un aro rojo en el suelo: "esto te hace daño".
     lg.setColor(1, 0.235, 0.314, 0.35)
     for i = 1, n do
         local p = list[i]
-        if not p.friendly and cam.sees(p.x, p.y, 40) then lg.ellipse("fill", p.x, p.y, p.r * 1.5, p.r * 0.6) end
+        if not p.friendly and cam.sees(p.x, p.y, 40) then ell(p.x, p.y, p.r * 1.5, p.r * 0.6) end
     end
     local VFX = G.VFX
     for i = 1, n do

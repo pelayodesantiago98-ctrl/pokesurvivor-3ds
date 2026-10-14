@@ -40,11 +40,27 @@ local lost = nil          -- { dex, name, x, y, hp, maxHp, state, tx, ty, t, ani
 local lostPool = nil      -- candidatos a perderse (se calcula una vez)
 E.golden = false
 
+-- Sorteo adelantado: PRE_T segundos antes de cada evento se decide cuál toca (y qué
+-- Pokémon salen) y sus hojas de sprites se van cargando de una en una
+-- (G.Sprites.preloadSoon). Antes se cargaban todas de golpe al empezar: en la 3DS,
+-- ~40 ms por hoja, y una horda trae 4 (un tirón de 0,2 s).
+local PRE_T = 6
+local pre = { id = nil, type = nil, defs = nil, mon = nil, t = 0 }
+local preDex = {}
+local THIEF_DEX = { 52, 1000 }   -- Meowth y Gholdengo (duendes del tesoro)
+local thiefPre = false
+
+local function clearPre()
+    pre.id, pre.type, pre.defs, pre.mon = nil, nil, nil, nil
+    for i = #preDex, 1, -1 do preDex[i] = nil end
+end
+
 function E.reset()
     nextT = U.rand(EVERY0, EVERY1)
     cur = nil; last = nil; lost = nil
     thiefT = U.rand(THIEF_FIRST0, THIEF_FIRST1); thieves = 0
     E.golden = false
+    clearPre(); thiefPre = false
 end
 
 local function say(text, secs) G.Spawner.say(text, secs, true) end
@@ -81,7 +97,7 @@ local function makeLost(o)
     }
 end
 
-local function spawnLost(pl)
+local function getLostPool()
     if not lostPool then
         lostPool = {}
         for i = 1, #G.DEX do
@@ -91,8 +107,14 @@ local function spawnLost(pl)
             end
         end
     end
-    if #lostPool == 0 then return false end
-    local mon = U.pick(lostPool)
+    return lostPool
+end
+
+--- @param mon  el Pokémon ya sorteado (sorteo adelantado) o nil
+local function spawnLost(pl, mon)
+    local pool = getLostPool()
+    if #pool == 0 then return false end
+    mon = mon or U.pick(pool)
     local ax, ay, bx, by = nil, nil, nil, nil
     for _ = 1, 20 do
         local a = random() * 6.2832
@@ -227,16 +249,46 @@ end
 
 -- ---------------- ciclo ----------------
 
+-- Sorteo de la horda: tipo y Pokémon (type, defs) o nil si no hay tipo posible.
+local function rollHorde(time)
+    local types = G.Enemies.hordeTypes(time)
+    if #types == 0 then return nil end
+    local type = U.pick(types)
+    return type, G.Enemies.hordeDefs(type, time)
+end
+
+-- Qué evento toca (nunca el mismo dos veces seguidas).
+local function pickId()
+    local ids = {}
+    if last ~= 'horde' then ids[#ids + 1] = 'horde' end
+    if last ~= 'gold' then ids[#ids + 1] = 'gold' end
+    if last ~= 'lost' then ids[#ids + 1] = 'lost' end
+    return U.pick(ids)
+end
+
+-- Sortea ya el próximo evento y pone a cargar sus hojas (una por fotograma).
+local function preRoll(time)
+    clearPre()
+    pre.id = pickId(); pre.t = time
+    if pre.id == 'horde' then
+        pre.type, pre.defs = rollHorde(time)
+        if pre.defs then for i = 1, #pre.defs do preDex[i] = pre.defs[i].dex end end
+    elseif pre.id == 'lost' then
+        local pool = getLostPool()
+        if #pool > 0 then pre.mon = U.pick(pool); preDex[1] = pre.mon.dex end
+    end
+    if #preDex > 0 then G.Sprites.preloadSoon(preDex, false) end
+end
+
 local function start(id, time, pl)
     last = id
     if id == 'horde' then
-        local types = G.Enemies.hordeTypes(time)
-        if #types == 0 then return start('gold', time, pl) end
-        local type = U.pick(types)
-        local defs = G.Enemies.hordeDefs(type, time)
+        local type, defs = pre.type, pre.defs
+        if not defs then type, defs = rollHorde(time) end
+        if not defs then return start('gold', time, pl) end
         local dexes = {}
         for i = 1, #defs do dexes[i] = defs[i].dex end
-        G.Sprites.preload(dexes)
+        G.Sprites.preload(dexes)          -- (ya cargadas si dio tiempo: no cuesta nada)
         setCur(id, DUR, type, defs)
         G.Spawner.burst(6)
     elseif id == 'gold' then
@@ -244,7 +296,7 @@ local function start(id, time, pl)
         local all = G.EnemyMgr.all()
         for i = 1, #all do all[i]:makeGolden() end
     else
-        if not spawnLost(pl) then return end
+        if not spawnLost(pl, pre.mon) then return end
         setCur(id, INF, nil, nil)
     end
     announce()
@@ -260,33 +312,43 @@ function E.update(dt, pl, time)
 
     if thieves < 2 then
         thiefT = thiefT - dt
+        -- (Sus hojas, unos segundos antes y de una en una.)
+        if thiefT <= PRE_T and not thiefPre then thiefPre = true; G.Sprites.preloadSoon(THIEF_DEX, false) end
         if thiefT <= 0 then
             if G.EnemyMgr.bossAlive() then thiefT = 8
             else
                 spawnThief(pl, time)
                 thieves = thieves + 1
                 thiefT = U.rand(THIEF_NEXT0, THIEF_NEXT1)
+                thiefPre = false
             end
         end
     end
 
     if cur then return end
     nextT = nextT - dt
+    -- Sorteo adelantado (otra vez si el evento se retrasó mucho por un jefe).
+    if nextT <= PRE_T and (not pre.id or time - pre.t > 30) then preRoll(time) end
     if nextT > 0 then return end
     if G.EnemyMgr.bossAlive() then nextT = 10 return end
     nextT = U.rand(EVERY0, EVERY1)
-    -- Nunca el mismo dos veces seguidas.
-    local ids = {}
-    if last ~= 'horde' then ids[#ids + 1] = 'horde' end
-    if last ~= 'gold' then ids[#ids + 1] = 'gold' end
-    if last ~= 'lost' then ids[#ids + 1] = 'lost' end
-    start(U.pick(ids), time, pl)
+    start(pre.id or pickId(), time, pl)
+    clearPre()
 end
 
 -- Lo que sale durante una horda (lo usa G.Enemies.bagAt).
 function E.bag()
     if cur and cur.id == 'horde' and cur.defs and #cur.defs > 0 then return cur.defs end
     return nil
+end
+
+--- Marca en `keep` ({dex=true}) las hojas que los eventos necesitan pronto o ya
+--- (el perdido, lo sorteado por adelantado, los duendes a punto de salir), para
+--- que el spawner no las suelte (y se vuelvan a cargar de golpe).
+function E.keepDex(keep)
+    if lost then keep[lost.dex] = true end
+    for i = 1, #preDex do keep[preDex[i]] = true end
+    if thiefPre then for i = 1, #THIEF_DEX do keep[THIEF_DEX[i]] = true end end
 end
 
 function E.isGolden() return E.golden end
@@ -327,10 +389,10 @@ function goalD.draw()
     local now = U.now()
     local k = 0.5 + sin(now * 4) * 0.5
     U.setColor('#5fe08a', 0.25 + k * 0.15)
-    lg.ellipse("fill", L.tx, L.ty, 56, 40)
+    G.Sprites.ellipse(L.tx, L.ty, 56, 40)
     U.setColor('#7dffb0', 0.9)
     lg.setLineWidth(2)
-    lg.ellipse("line", L.tx, L.ty, 56, 40)
+    G.Sprites.ellipseLine(L.tx, L.ty, 56, 40)
     lg.setLineWidth(1)
     lg.setColor(1, 1, 1, 1)
     G.Icons.draw('heart', U.round(L.tx - 8), U.round(L.ty - 30 - k * 6), 16)
@@ -342,7 +404,7 @@ function monD.draw()
     if not L then return end
     local now = U.now()
     U.setColor('#7dffb0', 0.3)
-    lg.ellipse("fill", L.x, L.y, L.r * 1.5, L.r * 0.6)
+    G.Sprites.ellipse(L.x, L.y, L.r * 1.5, L.r * 0.6)
     G.Sprites.drawShadow(L.dex, L.x, L.y, 1)
     drawOpts.flash = L.flash > 0
     L.anim:draw(L.x, L.y, drawOpts)

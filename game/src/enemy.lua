@@ -10,6 +10,7 @@
 -- El gestor mantiene una rejilla espacial (reconstruida cada fotograma) para la
 -- separación entre enemigos y las colisiones de proyectiles. Sin cooperativo.
 local U = G.U
+local Sprites = G.Sprites
 local lg = love.graphics
 local floor, max, min, sqrt, abs, atan2, cos, sin, random =
     math.floor, math.max, math.min, math.sqrt, math.abs, math.atan2, math.cos, math.sin, love.math.random
@@ -42,6 +43,13 @@ local function bossScale(dex)
     return U.clamp(U.round(110 / h * 2) / 2, 1, 2)
 end
 
+-- Vista de la cámara (sin margen) para este fotograma: la apunta EnemyMgr.update
+-- una vez, en vez de pedírsela a G.Camera.sees (3 llamadas) varias veces por enemigo.
+local vl, vt, vr, vb = -1e9, -1e9, 1e9, 1e9
+local function inView(x, y, pad)
+    return x > vl - pad and x < vr + pad and y > vt - pad and y < vb + pad
+end
+
 local function hasAny(T, a, b, c, d, e)
     for i = 1, #T do
         local t = T[i]
@@ -70,6 +78,7 @@ function Enemy.new(def, x, y, sc, boss)
     self.anim = G.Sprites.Animator.new(def.dex, self.scale)
     self.r = G.Sprites.bodyRadius(def.dex, self.scale)
     self.bodyH = G.Sprites.bodyHeight(def.dex, self.scale)
+    self.shR = G.Sprites.shadowRadius(def.dex, self.scale)
 
     local dif = G.Difficulty.get()             -- Fácil / Medio / Difícil / Extremo
     self.maxHp = U.round(def.hp * sc.hp * dif.hp)
@@ -236,7 +245,8 @@ end
 
 function Enemy:update(dt, pl)
     -- Fuera de pantalla no hace falta animar (sí moverse y pensar).
-    local seen = G.Camera.sees(self.x, self.y, 120)
+    local seen = inView(self.x, self.y, 120)
+    self.free = false               -- (ver separate: true si se ha chocado y no tocaba nada)
     if seen or self.dead then self.anim:update(dt) end
     if self.flash > 0 then self.flash = self.flash - dt end
     if self.dead then self.fade = self.fade - dt; return end
@@ -295,7 +305,7 @@ function Enemy:update(dt, pl)
         self.x = self.x + (vx0 + self.kx) * dt; self.y = self.y + (vy0 + self.ky) * dt
         self.kx = self.kx * 0.0015 ^ dt; self.ky = self.ky * 0.0015 ^ dt
         if G.World.collide(self) and U.hypot(self.x - ox, self.y - oy) < spd * k * dt * 0.3 then self.zig = self.zig + 1.4 end
-        if random() < dt * 6 and G.Camera.sees(self.x, self.y, 0) then
+        if random() < dt * 6 and inView(self.x, self.y, 0) then
             G.FX.twinkle(self.x + U.rand(-self.r, self.r), self.y - U.rand(4, self.bodyH))
         end
         self.anim.dir = G.Sprites.dirFromAngle(a)
@@ -306,7 +316,7 @@ function Enemy:update(dt, pl)
     if self.behavior == 'runner' and pl._vx ~= nil then
         local lead = U.clamp(dist / max(60, spd), 0, 1.4)
         dx, dy = U.norm(pl.x + pl._vx * lead - self.x, pl.y + pl._vy * lead - self.y)
-        if G.Camera.sees(self.x, self.y, 0) and random() < dt * 10 then
+        if inView(self.x, self.y, 0) and random() < dt * 10 then
             G.FX.px(self.x - dx * 8 + U.rand(-4, 4), self.y, '#e8dcc0', pxOpts)
         end
     end
@@ -391,7 +401,9 @@ function Enemy:update(dt, pl)
     self.kx = self.kx * 0.0015 ^ dt; self.ky = self.ky * 0.0015 ^ dt
     self.x = self.x + vx * dt; self.y = self.y + vy * dt
 
-    if not self.flying and G.World.collide(self) then
+    local hit = false
+    if not self.flying then hit = G.World.collide(self); self.free = not hit end
+    if hit then
         -- ¿Ha avanzado bastante menos de lo que quería?
         local want = U.hypot(vx, vy) * dt
         local got = U.hypot(self.x - ox, self.y - oy)
@@ -742,10 +754,13 @@ function Enemy:draw()
         elseif gold then col = '#ffd23f'
         else col = '#ffd95e' end
         U.setColor(col, a)
-        lg.ellipse('fill', self.x, self.y, self.r * 1.6, self.r * 0.6)
+        Sprites.ellipse(self.x, self.y, self.r * 1.6, self.r * 0.6)
     end
 
-    G.Sprites.drawShadow(self.dex, self.x, self.y, self.scale)
+    -- Sombra (como Sprites.drawShadow, con el radio ya calculado; el color lo
+    -- vuelve a poner anim:draw).
+    lg.setColor(0, 0, 0, 0.34)
+    Sprites.ellipse(self.x, self.y, self.shR, self.shR * 0.42)
     -- Los que flotan ya van en el aire en su sprite: sólo se mecen un poco.
     -- (Y los que saltan, en arco.)
     local lift = ((self.flying and not self.boss) and (1 + sin(self.bob) * 1.5) or 0) + self.jumpLift
@@ -758,17 +773,18 @@ function Enemy:draw()
     -- Escudo: burbuja azul.
     if self.shield > 0 then
         local a = 0.35 + sin(self.bob) * 0.08
+        local cy, rx, ry = self.y - self.bodyH * 0.45, self.r * 1.5, self.bodyH * 0.65
         lg.setColor(127 / 255, 200 / 255, 1, 0.14 * a)
-        lg.ellipse('fill', self.x, self.y - self.bodyH * 0.45, self.r * 1.5, self.bodyH * 0.65)
+        Sprites.ellipse(self.x, cy, rx, ry)
         U.setColor('#9fd8ff', a)
         lg.setLineWidth(2)
-        lg.ellipse('line', self.x, self.y - self.bodyH * 0.45, self.r * 1.5, self.bodyH * 0.65)
+        Sprites.ellipseLine(self.x, cy, rx, ry)
         lg.setLineWidth(1)
     end
 
     if self.burn > 0 or self.poison > 0 then
         U.setColor(self.burn > 0 and '#ff8a3d' or '#c86bdc', 0.45)
-        lg.ellipse('fill', self.x, self.y, self.r * 1.2, self.r * 0.5)
+        Sprites.ellipse(self.x, self.y, self.r * 1.2, self.r * 0.5)
     end
 
     -- Apoyos: icono encima, para saber a quién ir primero.
@@ -944,9 +960,15 @@ local function separate(dt)
                 end
             end
             if n > 0 then
-                e.x = e.x + px * 42 * dt
-                e.y = e.y + py * 42 * dt
-                if not e.flying then G.World.collide(e) end
+                local mx, my = px * 42 * dt, py * 42 * dt
+                e.x = e.x + mx
+                e.y = e.y + my
+                -- Si en su update ya se ha chocado sin tocar nada y el empujón es de
+                -- poco (casi siempre), no hace falta volver a chocarlo: a lo sumo se
+                -- metería un par de unidades en una roca hasta el fotograma siguiente,
+                -- que se vuelve a chocar al moverse. (World.collide es lo más caro de
+                -- los enemigos.)
+                if not e.flying and not (e.free and mx * mx + my * my < 4) then G.World.collide(e) end
             end
         end
     end
@@ -988,6 +1010,9 @@ function M.update(dt, pl)
     end
     pl._px = pl.x; pl._py = pl.y
 
+    local cam = G.Camera
+    vl, vt = cam.left(), cam.top()
+    vr, vb = vl + cam.w, vt + cam.h
     M.rebuildGrid()
     for i = 1, #list do list[i]:update(dt, pl) end
     separate(dt)
@@ -1022,7 +1047,7 @@ function M.update(dt, pl)
                 -- FUERA DE LA VISTA vuelven a salir por delante de ti. Así no se puede
                 -- huir sin más, y nunca desaparece uno que estés viendo.
                 local d2 = U.dist2(e.x, e.y, pl.x, pl.y)
-                local unseen = d2 > R2 and not G.Camera.sees(e.x, e.y, 60)
+                local unseen = d2 > R2 and not inView(e.x, e.y, 60)
                 local behind = sp > 40 and ((e.x - pl.x) * pl._vx + (e.y - pl.y) * pl._vy) < -0.2 * sqrt(d2) * sp
                 if unseen and behind then e.lagT = e.lagT + dt
                 elseif not unseen then e.lagT = 0 end
@@ -1046,13 +1071,18 @@ end
 function M.drawables(cam)
     for i = 1, dn do dout[i] = nil end
     local n = 0
+    -- (Límites de la vista con 80 de margen, calculados una vez.)
+    local l, t = cam.left() - 80, cam.top() - 80
+    local r, b = l + cam.w + 160, t + cam.h + 160
     for i = 1, #corpses do
         local e = corpses[i]
-        if cam.sees(e.x, e.y, 80) then n = n + 1; dout[n] = e end
+        local x, y = e.x, e.y
+        if x > l and x < r and y > t and y < b then n = n + 1; dout[n] = e end
     end
     for i = 1, #list do
         local e = list[i]
-        if cam.sees(e.x, e.y, 80) then n = n + 1; dout[n] = e end
+        local x, y = e.x, e.y
+        if x > l and x < r and y > t and y < b then n = n + 1; dout[n] = e end
     end
     dn = n
     return dout, n

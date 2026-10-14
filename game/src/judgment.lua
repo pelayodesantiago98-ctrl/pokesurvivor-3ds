@@ -469,22 +469,26 @@ end
 -- La rueda de Arceus: aro dorado con 12 joyas que gira.
 local GEMS = { '#ff6b4d', '#4fa8ff', '#5fe08a', '#ffe14d', '#b37bff', '#c9d2de' }
 local function wheel(x, y, R, rot, alpha)
+    -- Aros con los tramos justos (ver G.Sprites.ellipseLine): cada tramo de una
+    -- línea son 6 vértices y el radio es grande.
+    local seg = max(8, floor(3.2 * math.sqrt(R * 0.5)))
     U.setColor(GOLD, alpha * 0.35)
     lg.setLineWidth(max(4, R * 0.14))
-    lg.circle('line', x, y, R)
+    lg.circle('line', x, y, R, seg)
     U.setColor(GOLD, alpha)
     lg.setLineWidth(max(2, R * 0.07))
-    lg.circle('line', x, y, R)
+    lg.circle('line', x, y, R, seg)
     lg.setLineWidth(max(1, R * 0.025))
-    lg.circle('line', x, y, R * 0.82)
+    lg.circle('line', x, y, R * 0.82, seg)
+    local t = R * 0.07
     for i = 0, 11 do
         local a = rot + i * 6.2832 / 12
         local ca, sa = cos(a), sin(a)
-        local function p(r, t) return x + ca * r - sa * t, y + sa * r + ca * t end
-        local x1, y1 = p(R * 1.02, 0)
-        local x2, y2 = p(R * 0.91, -R * 0.07)
-        local x3, y3 = p(R * 0.8, 0)
-        local x4, y4 = p(R * 0.91, R * 0.07)
+        -- Punto (r, t) en el sistema girado: x + ca·r - sa·t, y + sa·r + ca·t.
+        local x1, y1 = x + ca * R * 1.02, y + sa * R * 1.02
+        local x2, y2 = x + ca * R * 0.91 + sa * t, y + sa * R * 0.91 - ca * t
+        local x3, y3 = x + ca * R * 0.8, y + sa * R * 0.8
+        local x4, y4 = x + ca * R * 0.91 - sa * t, y + sa * R * 0.91 + ca * t
         U.setColor(GEMS[i % #GEMS + 1], alpha)
         lg.polygon('fill', x1, y1, x2, y2, x3, y3, x4, y4)
     end
@@ -499,11 +503,11 @@ function drawableT.draw()
     local near = U.clamp(1 - lift / 900, 0, 1)
     -- Sombra que crece mientras baja.
     lg.setColor(0, 0, 0, 0.15 + near * 0.3)
-    lg.ellipse('fill', A.x, A.y, 44 * (0.4 + near * 0.6), 16 * (0.4 + near * 0.6))
+    G.Sprites.ellipse(A.x, A.y, 44 * (0.4 + near * 0.6), 16 * (0.4 + near * 0.6))
     -- Aura dorada en el suelo.
     if lift < 40 then
         U.setColor(GOLD, 0.22 + sin(U.now() * 3) * 0.06)
-        lg.ellipse('fill', A.x, A.y, A.r * 2.2, A.r * 0.8)
+        G.Sprites.ellipse(A.x, A.y, A.r * 2.2, A.r * 0.8)
     end
     -- La rueda dorada detrás de él.
     wheel(A.x, A.y - lift - A.bodyH * 0.55, A.bodyH * 0.62, A.spin * 0.6, 0.55)
@@ -531,9 +535,9 @@ function J.drawAir()
     end
     -- Resplandor en el suelo, donde va a caer.
     U.setColor('#fff3c8', a * (0.25 + near * 0.4))
-    lg.ellipse('fill', A.x, A.y, w * 1.5, w * 0.54)
+    G.Sprites.ellipse(A.x, A.y, w * 1.5, w * 0.54)
     U.setColor(GOLD, a * (0.2 + near * 0.3))
-    lg.ellipse('fill', A.x, A.y, w * 0.9, w * 0.32)
+    G.Sprites.ellipse(A.x, A.y, w * 0.9, w * 0.32)
     lg.setColor(1, 1, 1, 1)
 end
 
