@@ -28,7 +28,10 @@ local byte, char, format, find, sub, gsub = string.byte, string.char, string.for
 local ESC = { ['"'] = '\\"', ['\\'] = '\\\\', ['\b'] = '\\b', ['\f'] = '\\f',
               ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t' }
 local function escChar(c) return ESC[c] or format("\\u%04x", byte(c)) end
-local function encString(s) return '"' .. gsub(s, '[%c"\\]', escChar) .. '"' end
+local function encString(s)
+    if not find(s, '[%c"\\]') then return '"' .. s .. '"' end
+    return '"' .. gsub(s, '[%c"\\]', escChar) .. '"'
+end
 
 local function encNumber(n)
     if n ~= n or n == huge or n == -huge then return "null" end
@@ -66,17 +69,32 @@ local function encTable(t, out, seen)
         end
         out[#out + 1] = "]"
     else
-        -- Claves ordenadas: salida determinista (facilita comparar guardados).
-        local keys = {}
-        for k in pairs(t) do keys[#keys + 1] = k end
-        sort(keys, sortKeys)
+        -- Claves ordenadas: salida determinista (facilita comparar guardados). Se
+        -- ordenan ya convertidas a texto (una conversión por clave y comparación
+        -- nativa: la lista de Pokémon tiene cientos de claves numéricas).
+        local keys, orig, clash = {}, {}, false
+        for k in pairs(t) do
+            local ks = keyString(k)
+            if orig[ks] ~= nil then clash = true end
+            orig[ks] = k
+            keys[#keys + 1] = ks
+        end
+        if clash then
+            -- 25 y "25" en la misma tabla (no pasa en la partida): como antes.
+            keys = {}
+            for k in pairs(t) do keys[#keys + 1] = k end
+            sort(keys, sortKeys)
+            for i = 1, #keys do local k = keys[i]; orig[i] = k; keys[i] = keyString(k) end
+        else
+            sort(keys)
+        end
         out[#out + 1] = "{"
         for i = 1, #keys do
-            local k = keys[i]
+            local ks = keys[i]
             if i > 1 then out[#out + 1] = "," end
-            out[#out + 1] = encString(keyString(k))
+            out[#out + 1] = encString(ks)
             out[#out + 1] = ":"
-            encValue(t[k], out, seen)
+            encValue(t[orig[clash and i or ks]], out, seen)
         end
         out[#out + 1] = "}"
     end
@@ -125,8 +143,11 @@ local SIMPLE = { ['"'] = '"', ['\\'] = '\\', ['/'] = '/', b = '\b', f = '\f', n 
 
 local function decString(s, i)
     -- s[i] es la comilla de apertura
-    local parts, n = {}, 0
     local j = i + 1
+    -- Lo normal (sin escapes): el texto hasta la comilla, sin tabla de trozos.
+    local a0 = find(s, '[%c"\\]', j)
+    if a0 and byte(s, a0) == 34 then return sub(s, j, a0 - 1), a0 + 1 end
+    local parts, n = {}, 0
     while true do
         local a, b = find(s, '[%c"\\]', j)
         if not a then fail(s, i, "string sin cerrar") end

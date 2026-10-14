@@ -150,19 +150,41 @@ function A.sfx(name, opts)
     pcall(play, file, settings.sfx)
 end
 
--- Carga de golpe todos los efectos (evita tirones la primera vez que suenan).
+-- Precarga de todos los efectos (evita tirones la primera vez que suenan). Son ~80
+-- WAV: cargarlos de golpe retrasaba en la 3DS la primera imagen del juego. Se ponen
+-- en cola (los de los menús primero) y A.update carga uno por fotograma fuera de la
+-- partida; jugando, uno cada PRELOAD_GAP s. Lo que suene antes se carga al momento.
 local PRELOAD = {
     "hover", "click", "back", "confirm", "select", "error", "hit", "faint", "bossDown", "coin",
     "heal", "levelup", "hurt", "boss", "surge", "shiny", "shinyGet", "break", "chest", "grass",
     "ball", "shake", "rift", "legend", "gameover", "biome", "pause", "buy", "shot_melee", "shot_nova",
     "shot_projectile_fire", "shot_projectile_electric",
 }
+local PRELOAD_GAP = 0.5
+local queue, qHead, qWait = {}, 1, 0
 function A.preload()
     if not hasAudio then return end
-    for _, f in ipairs(PRELOAD) do pcall(getPool, f) end
-    for _, files in pairs(SHOT_FILES) do for b = 0, 2 do pcall(getPool, files[b]) end end
-    for i = 0, 24 do pcall(getPool, XP_FILES[i]) end
-    for r = 1, 5 do pcall(getPool, BURST_FILES[r]); pcall(getPool, REVEAL_FILES[r]) end
+    local function add(f) queue[#queue + 1] = f end
+    for _, f in ipairs(PRELOAD) do add(f) end
+    for _, kind in ipairs({ "projectile", "beam", "orbit", "aura", "buff" }) do
+        for b = 0, 2 do add(SHOT_FILES[kind][b]) end
+    end
+    for i = 0, 24 do add(XP_FILES[i]) end
+    for r = 1, 5 do add(BURST_FILES[r]); add(REVEAL_FILES[r]) end
+end
+local function preloadStep(dt)
+    if qHead > #queue then return end
+    if G.Game and G.Game.state and G.Game.state() == "playing" then
+        qWait = qWait - dt
+        if qWait > 0 then return end
+        qWait = PRELOAD_GAP
+    end
+    -- Salta los que ya estén cargados (sonaron antes de llegar a ellos).
+    while qHead <= #queue and pools[queue[qHead]] ~= nil do qHead = qHead + 1 end
+    if qHead > #queue then return end
+    local f = queue[qHead]
+    qHead = qHead + 1
+    getPool(f)
 end
 
 -- ---------------------------------------------------------------- música
@@ -243,6 +265,7 @@ function A.update(dt)
     if not hasAudio then return end
     pcall(updateMusic, dt)
     pcall(pruneVoices)
+    if qHead <= #queue then pcall(preloadStep, dt) end
 end
 
 -- ---------------------------------------------------------------- ajustes

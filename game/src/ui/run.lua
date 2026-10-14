@@ -12,6 +12,39 @@ local W, H = UI.W, UI.H
 
 local hud = {}
 
+-- Estilos fijos de la fuente pixelada y textos cacheados (nada de tablas ni
+-- cadenas nuevas en cada fotograma ni en cada repintado del HUD).
+local BOX_DARK = { s = 2, color = "#383838", shadow = "#b8b8b0" }
+local BOX_SHINY = { s = 2, color = "#50a8f0", shadow = "#b8b8b0" }
+local BOX_HP = { s = 1, color = "#58d080", noOutline = true }
+local STATS_ST = { s = 1, color = "#e8e4ff", shadow = "#3a3458" }
+local BURST_ST = { s = 1, color = "#ffffff", shadow = "#2a2440" }
+local LV_TXT = {}                          -- nivel -> "LV12"
+local BUFF_KEYS = { "atk", "spd", "def", "regen" }
+local BUFF_COL = { atk = "#ff6b4d", spd = "#7fe0ff", def = "#b0b8c8", regen = "#5fe08a" }
+local BUFF_LBL = { atk = "ATK", spd = "VEL", def = "DEF", regen = "REG" }
+local SLOT_ID = { "slot1", "slot2", "slot3", "slot4" }
+local T_ITEM = { size = 10, color = "#ffffff", w = 84 }
+local T_NOITEM = { size = 10, color = "#c8c0e0" }
+local T_BONDS = { size = 10, color = UI.C.pink }
+local B_PAUSE = { size = 10, color = "#4a4468" }
+local B_BURST = { size = 10, color = "#ffffff" }
+-- Texto de número cacheado por tabla (cifras que se repiten: vida, monedas...).
+local function numText(cache, prefix, n, suffix)
+    local s = cache[n]
+    if not s then s = prefix .. n .. suffix; cache[n] = s end
+    return s
+end
+local BURST_TXT, BONDS_TXT = {}, {}
+local statParts = {}
+-- Reloj de la partida ("1:23"), rehecho sólo al cambiar de segundo.
+local clockSec, clockTxt, clockX, clockY = -1, "", 0, 0
+local function clockText()
+    local s = math.floor(G.Game.time())
+    if s ~= clockSec then clockSec, clockTxt = s, U.mmss(s) end
+    return clockTxt
+end
+
 local function cdOf(m, pl)
     if m.kind == "orbit" then return 0 end
     return U.clamp(m.t / (m.cd * pl.cdMul), 0, 1)
@@ -20,7 +53,7 @@ end
 -- Caja de estado como la de los combates de los juegos: nombre y nivel, etiqueta
 -- HP con barra que pasa de verde a amarillo y rojo, cifras a la derecha y la barra
 -- azul de experiencia debajo.
-local function battleBox(pl, x, y, w)
+local function battleBox(pl, x, y, w, live)
     local h = 56
     -- Caja gris de Platino: sombra, relleno, brillo superior y contorno oscuro
     U.setColor("#202020")
@@ -37,18 +70,19 @@ local function battleBox(pl, x, y, w)
     lg.setLineWidth(1)
     -- Nombre y nivel en la fuente pixelada con la sombra clara de Platino
     local PF = G.PixelFont
-    local dark, sh = { s = 2, color = "#383838", shadow = "#b8b8b0" }, nil
+    local dark = BOX_DARK
     PF.print(pl.mon.name, x + 10, y + 7, dark)
-    local lv = "LV" .. pl.level
+    local lv = LV_TXT[pl.level]
+    if not lv then lv = "LV" .. pl.level; LV_TXT[pl.level] = lv end
     local lvw = PF.width(lv, 2)
     PF.print(lv, x + w - 12 - lvw, y + 7, dark)
-    if pl.shiny then PF.print("*", x + w - 24 - lvw, y + 7, { s = 2, color = "#50a8f0", shadow = "#b8b8b0" }) end
+    if pl.shiny then PF.print("*", x + w - 24 - lvw, y + 7, BOX_SHINY) end
     -- Etiqueta HP: texto siempre verde sobre fondo oscuro (la que cambia de color
     -- según la vida es la barra, no la etiqueta).
     local bx, by, bw, bh = x + 54, y + 25, w - 66, 7
     U.setColor("#383838")
     lg.rectangle("fill", bx - 25, by - 3, 23, 13, 4, 4)
-    PF.print("HP", bx - 25 + (23 - PF.width("HP", 1)) / 2, by, { s = 1, color = "#58d080", noOutline = true })
+    PF.print("HP", bx - 25 + (23 - PF.width("HP", 1)) / 2, by, BOX_HP)
     -- Barra de vida: borde oscuro, pista blanca y relleno por tramos
     local frac = U.clamp(pl.hp / pl.maxHp, 0, 1)
     U.setColor("#303030")
@@ -76,10 +110,16 @@ local function battleBox(pl, x, y, w)
     lg.rectangle("fill", ex - 2, ey - 2, ew + 4, eh + 4, 2, 2)
     U.setColor("#485060")
     lg.rectangle("fill", ex, ey, ew, eh)
-    U.setColor("#38a0f8")
-    lg.rectangle("fill", ex, ey, ew * U.clamp(pl.xp / pl.xpNext, 0, 1), eh)
+    -- El relleno cambia con cada gema: en la imagen guardada no va (lo pone hud.draw).
+    if live then R.xpFill(pl, x, y, w, h) end
     lg.setColor(1, 1, 1, 1)
     return y + h + 12
+end
+
+-- Relleno de la barra de experiencia de la caja de estado (x, y, w, h de la caja).
+function R.xpFill(pl, x, y, w, h)
+    U.setColor("#38a0f8")
+    lg.rectangle("fill", x + 40, y + h + 4, (w - 48) * U.clamp(pl.xp / pl.xpNext, 0, 1), 4)
 end
 
 -- Geometría de los botones de movimiento y de la fila inferior (dibujo y zonas táctiles).
@@ -89,21 +129,20 @@ local function slotXY(i)
     return 8 + col_i * (MV_W + 8), MV_TOP + 6 + row * (MV_H + 4)
 end
 local BURST_X, BURST_W, PAUSE_X = 152, 94, W - 66
+local BOX_X, BOX_Y, BOX_W, BOX_H = 8, 6, 304, 56     -- caja de estado (BOX_H: alto fijo de battleBox)
 
 -- HUD completo. `live` = false cuando se pinta en la imagen guardada: entonces no
 -- lleva lo que se mueve cada fotograma (marco del activo, velo de recarga, latido
 -- del Burst), que hud.draw pone encima.
 local function drawHud(pl, live)
     R.platinumBackground(0)
-    local y0 = battleBox(pl, 8, 6, 304)
+    local y0 = battleBox(pl, BOX_X, BOX_Y, BOX_W, live)
 
     -- Buffs y poder
-    local COL = { atk = "#ff6b4d", spd = "#7fe0ff", def = "#b0b8c8", regen = "#5fe08a" }
-    local LBL = { atk = "ATK", spd = "VEL", def = "DEF", regen = "REG" }
     local bx = 170
-    for _, k in ipairs({ "atk", "spd", "def", "regen" }) do
+    for _, k in ipairs(BUFF_KEYS) do
         local b = pl.buffs[k]
-        if b and b.n > 0 then bx = bx + UI.chip(LBL[k] .. " x" .. b.n, bx, y0, COL[k]) + 4 end
+        if b and b.n > 0 then bx = bx + UI.chip(BUFF_LBL[k] .. " x" .. b.n, bx, y0, BUFF_COL[k]) + 4 end
     end
     if pl.power then
         bx = bx + UI.chip(string.upper(pl.power.def.name or "") .. " " .. math.ceil(pl.power.t) .. "s", bx, y0, pl.power.def.color or "#ffffff") + 4
@@ -111,9 +150,24 @@ local function drawHud(pl, live)
 
     -- Stats de la run
     -- Centrada entre la barra de experiencia (acaba en y0 - 4) y los botones (empiezan en ~92).
-    local stats = U.mmss(G.Game.time()) .. "  DERROTADOS " .. pl.kills .. "  JEFES " .. pl.bosses .. "  MONEDAS " .. pl.coins
+    -- Se escribe por trozos (mismo sitio que de una pieza): la fuente pixelada guarda
+    -- los glifos de cada texto distinto, y la línea entera cambia con cada derrota.
+    -- El reloj (primer trozo) cambia cada segundo: en la imagen guardada no va; hud.draw
+    -- lo escribe encima en (clockX, clockY). Sólo se repinta si cambia su ancho.
     local sy = math.floor(((y0 - 4) + 89) / 2 - 3.5)
-    G.PixelFont.print(stats, (W - G.PixelFont.width(stats, 1)) / 2, sy, { s = 1, color = "#e8e4ff", shadow = "#3a3458" })
+    local parts = statParts
+    parts[1] = clockText(); parts[2] = "  DERROTADOS "; parts[3] = tostring(pl.kills)
+    parts[4] = "  JEFES "; parts[5] = tostring(pl.bosses); parts[6] = "  MONEDAS "; parts[7] = tostring(pl.coins)
+    local PF = G.PixelFont
+    local tw = 0
+    for i = 1, 7 do tw = tw + PF.width(parts[i], 1) end
+    tw = tw + 6                                 -- separación de 1 px entre trozos (gap de s = 1)
+    local sx = math.floor((W - tw) / 2 + 0.5)
+    clockX, clockY = sx, sy
+    for i = 1, 7 do
+        if live or i > 1 then PF.print(parts[i], sx, sy, STATS_ST) end
+        sx = sx + PF.width(parts[i], 1) + 1
+    end
 
     -- Menú de movimientos como el de Platino: fondo gris carbón y 4 botones 2x2 del
     -- color del tipo, nombre arriba, etiqueta del tipo abajo a la izquierda y, en vez
@@ -125,7 +179,7 @@ local function drawHud(pl, live)
         local m = g and g[1]
         R.moveButton(x, y, MV_W, MV_H, m, g and #g > 1 and #g or nil, live and i == pl.active and m ~= nil,
                      live and m and cdOf(m, pl) or 0)
-        if m then UI.hitbox("slot" .. i, x, y, MV_W, MV_H) end
+        if m then UI.hitbox(SLOT_ID[i], x, y, MV_W, MV_H) end
     end
     lg.setColor(1, 1, 1, 1)
 
@@ -133,19 +187,20 @@ local function drawHud(pl, live)
     local by = H - 20
     if pl.item then
         G.Icons.draw(pl.item, 8, by - 3, 22)
-        UI.text(G.Items.BY[pl.item].name, 32, by + 3, { size = 10, color = "#ffffff", w = 84 })
+        UI.text(G.Items.BY[pl.item].name, 32, by + 3, T_ITEM)
     else
-        UI.text("Sin objeto", 10, by + 3, { size = 10, color = "#c8c0e0" })
+        UI.text("Sin objeto", 10, by + 3, T_NOITEM)
     end
     if pl.bonds > 0 then
         G.Icons.draw("bond", 118, by, 14)
-        UI.text("x" .. pl.bonds, 133, by + 3, { size = 10, color = UI.C.pink })
+        UI.text(numText(BONDS_TXT, "x", pl.bonds, ""), 133, by + 3, T_BONDS)
     end
     -- Ataque Burst: barra que se carga; llena, botón que late (X en el mando).
     local bx, bw = BURST_X, BURST_W
     local col = U.TYPE_COLOR[pl.mon.types[1]] or "#ffd23f"
     if G.Burst.ready(pl) then
-        UI.button("burst", bx, by, bw, 18, "¡BURST!", { size = 10, color = col })
+        B_BURST.color = col
+        UI.button("burst", bx, by, bw, 18, "¡BURST!", B_BURST)
         if live then
             U.setColor("#ffffff", 0.25 + 0.25 * math.sin(U.now() * 8))
             lg.rectangle("fill", bx + 2, by + 2, bw - 4, 14, 5, 5)
@@ -156,36 +211,68 @@ local function drawHud(pl, live)
         lg.rectangle("fill", bx, by + 1, bw, 16, 5, 5)
         U.setColor(col, 0.85)
         lg.rectangle("fill", bx + 2, by + 3, math.max(0, (bw - 4) * (pl.burst or 0)), 12, 4, 4)
-        G.PixelFont.print("BURST " .. math.floor((pl.burst or 0) * 100) .. "%", bx + 8, by + 6,
-                          { s = 1, color = "#ffffff", shadow = "#2a2440" })
+        G.PixelFont.print(numText(BURST_TXT, "BURST ", math.floor((pl.burst or 0) * 100), "%"), bx + 8, by + 6, BURST_ST)
     end
-    UI.button("pause", PAUSE_X, by, 58, 18, "Pausa", { size = 10, color = "#4a4468" })
+    UI.button("pause", PAUSE_X, by, 58, 18, "Pausa", B_PAUSE)
 end
 
 -- La pantalla de abajo casi no cambia de un fotograma a otro, pero son ~300 piezas
 -- (en la 3DS, 10-16 ms por fotograma). Se pinta en una imagen y sólo se repinta
 -- cuando cambia algo de lo que muestra (firma); lo animado va encima en directo.
-local hudCv, hudCvTried, hudSig = nil, false, nil
-local sigParts = {}
-local function hudSignature(pl)
-    local p, n = sigParts, 0
-    local function add(v) n = n + 1; p[n] = v end
-    add(pl.mon.name); add(pl.level); add(pl.shiny and 1 or 0)
-    add(math.ceil(pl.hp)); add(U.round(pl.maxHp))
-    add(math.floor(U.clamp(pl.xp / pl.xpNext, 0, 1) * 256))
-    for _, k in ipairs({ "atk", "spd", "def", "regen" }) do local b = pl.buffs[k]; add(b and b.n or 0) end
-    add(pl.power and (pl.power.def.name or "?") or ""); add(pl.power and math.ceil(pl.power.t) or 0)
-    add(math.floor(G.Game.time())); add(pl.kills); add(pl.bosses); add(pl.coins)
+local hudCv, hudCvTried, hudDirty = nil, false, true
+-- Firma: los valores que se ven en el HUD guardado, en una tabla que se compara
+-- campo a campo con la del último repintado (sin crear cadenas ni tablas). Los
+-- primeros SOFT_N son contadores que en plena pelea cambian casi en cada fotograma
+-- (derrotados, jefes, monedas, % del Burst, segundos del poder): si sólo cambian
+-- ellos, se repinta como mucho cada SOFT_GAP s; lo demás, al momento. La barra de
+-- experiencia (cambia con cada gema) y el reloj (cada segundo) no van en la imagen:
+-- se pintan encima; del reloj sólo cuenta su ancho (mueve el resto de la línea).
+local SOFT_N, SOFT_GAP = 5, 0.25
+local sigNow, sigOld, sigOldN, lastPaint = {}, {}, 0, -1
+HUD_REPAINTS = 0                           -- repintados de la imagen desde el arranque (main.lua: «rendimiento»)
+local function hudChanged(pl)
+    local p = sigNow
+    -- Contadores (blandos)
+    local burstReady = G.Burst.ready(pl)
+    p[1] = pl.kills; p[2] = pl.bosses; p[3] = pl.coins
+    p[4] = burstReady and -1 or math.floor((pl.burst or 0) * 100)
+    p[5] = pl.power and math.ceil(pl.power.t) or 0
+    -- Lo demás (duros)
+    p[6] = G.PixelFont.width(clockText(), 1)
+    p[7] = pl.mon.name; p[8] = pl.level; p[9] = pl.shiny and 1 or 0
+    p[10] = math.ceil(pl.hp); p[11] = U.round(pl.maxHp)
+    local n = 11
+    for i = 1, 4 do local b = pl.buffs[BUFF_KEYS[i]]; n = n + 1; p[n] = b and b.n or 0 end
+    n = n + 1; p[n] = pl.power and (pl.power.def.name or "?") or ""
     for i = 1, 4 do
         local g = pl.slots[i]
         local m = g and g[1]
-        if m then add(m.name); add(#g); add(m.type); add(m.lvl); add(m.evolved and 1 or 0)
-        else add("-") end
+        if m then
+            p[n + 1] = m.name; p[n + 2] = #g; p[n + 3] = m.type; p[n + 4] = m.lvl; p[n + 5] = m.evolved and 1 or 0
+            n = n + 5
+        else
+            n = n + 1; p[n] = "-"
+        end
     end
-    add(pl.item or ""); add(pl.bonds)
-    add(G.Burst.ready(pl) and -1 or math.floor((pl.burst or 0) * 100))
-    for i = n + 1, #p do p[i] = nil end
-    return table.concat(p, "|")
+    p[n + 1] = pl.item or ""; p[n + 2] = pl.bonds; p[n + 3] = burstReady and 1 or 0
+    n = n + 3
+    local now = love.timer.getTime()
+    local changed = hudDirty or n ~= sigOldN
+    if not changed then
+        for i = SOFT_N + 1, n do if p[i] ~= sigOld[i] then changed = true break end end
+    end
+    if not changed and now - lastPaint >= SOFT_GAP then
+        for i = 1, SOFT_N do if p[i] ~= sigOld[i] then changed = true break end end
+    end
+    if changed then
+        for i = 1, n do sigOld[i] = p[i] end
+        for i = n + 1, sigOldN do sigOld[i] = nil end
+        sigOldN = n
+        hudDirty = false
+        lastPaint = now
+        HUD_REPAINTS = HUD_REPAINTS + 1
+    end
+    return changed
 end
 
 function hud.draw()
@@ -193,17 +280,16 @@ function hud.draw()
     if not pl then return end
     if not hudCvTried then
         hudCvTried = true
-        if G_STEP then G_STEP("hud: creando imagen") end
+        -- (A la SD ya: la imagen del HUD aún no está probada en la consola.)
+        if G_STEP then G_STEP("hud: creando imagen", true) end
         local ok, cv = false, nil
         if not G_NO_HUD_CANVAS then ok, cv = pcall(lg.newCanvas, W, H) end
         if ok and cv then hudCv = cv end
-        if G_STEP then G_STEP("hud: imagen " .. (hudCv and "ok" or "no disponible")) end
+        if G_STEP then G_STEP("hud: imagen " .. (hudCv and "ok" or "no disponible"), true) end
     end
     if not hudCv then drawHud(pl, true) return end
 
-    local sig = hudSignature(pl)
-    if sig ~= hudSig then
-        hudSig = sig
+    if hudChanged(pl) then
         lg.push()
         lg.origin()
         lg.setCanvas(hudCv)
@@ -214,6 +300,8 @@ function hud.draw()
     end
     lg.setColor(1, 1, 1, 1)
     lg.draw(hudCv, 0, 0)
+    R.xpFill(pl, BOX_X, BOX_Y, BOX_W, BOX_H)
+    G.PixelFont.print(clockText(), clockX, clockY, STATS_ST)
 
     -- Zonas táctiles (se borran en cada fotograma) y lo animado.
     local by = H - 20
@@ -222,7 +310,7 @@ function hud.draw()
         local g = pl.slots[i]
         local m = g and g[1]
         if m then
-            UI.hitbox("slot" .. i, x, y, MV_W, MV_H)
+            UI.hitbox(SLOT_ID[i], x, y, MV_W, MV_H)
             R.moveVeil(x, y, MV_W, MV_H, cdOf(m, pl))
             if i == pl.active then UI.selectFrame(x, y, MV_W, MV_H) end
         end
@@ -246,7 +334,7 @@ function R.moveVeil(x, y, w, h, cd)
 end
 
 -- Al empezar otra partida (o volver al HUD) se repinta seguro.
-function hud.enter() hudSig = nil end
+function hud.enter() hudDirty = true end
 
 -- ---------------- estilo Platino ----------------
 
@@ -324,8 +412,66 @@ local function frameOf(t)
         badge = U.hexMix(base, "#ffffff", 0.18),
         badgeEdge = U.shade(base, -0.5),
     }
+    f.badgeSt = { s = 1, color = "#ffffff", shadow = f.badgeEdge }
     FRAME[t] = f
     return f
+end
+-- Marco de un hueco vacío.
+local EMPTY_FRAME = { bevel = "#9894b0", bevel2 = "#aca8c4", line = "#3e3a52", frame = "#6a6688", frameDark = "#4e4a68",
+                      side = "#24202e", bottom = "#4a4664" }
+-- Filas de la tapa de cada marco: { color, sangría }.
+local function lidOf(f)
+    local lid = f.lid
+    if not lid then
+        lid = { { "#303132", 5 }, { "#86888b", 4 }, { "#f2f7ec", 3 }, { f.bevel, 2 }, { f.bevel2, 2 }, { f.bevel2, 1 }, { f.line, 1 } }
+        f.lid = lid
+    end
+    return lid
+end
+local NAME_ST = { s = 1.5, gap = 1, color = "#403f30", shadow = "#fbf6f0" }
+local FUSED_NAME = {}                -- nombre -> { [n] = "nombre +n" }
+
+-- Cómo se escribe el nombre de un movimiento en su botón (una o dos líneas, ya
+-- centradas), calculado una vez por nombre y ancho: { a, ax, b, bx } (b = nil: una línea).
+local nameLayouts = {}
+local function nameLayout(name, fw)
+    local byW = nameLayouts[fw]
+    if not byW then byW = {}; nameLayouts[fw] = byW end
+    local L = byW[name]
+    if L then return L end
+    local PFn = G.PixelFont
+    local FS = 1.5                       -- tamaño intermedio de la fuente pixelada
+    local maxw = fw - 2
+    if PFn.width(name, FS, 1) <= maxw then
+        L = { name, (fw - PFn.width(name, FS, 1)) / 2 }
+    else
+        local best, a, b = math.huge, name, ""
+        local i = name:find(" ", 1, true)
+        while i do
+            local l1, l2 = name:sub(1, i - 1), name:sub(i + 1)
+            local wmax = math.max(PFn.width(l1, FS, 1), PFn.width(l2, FS, 1))
+            if wmax < best then best, a, b = wmax, l1, l2 end
+            i = name:find(" ", i + 1, true)
+        end
+        if best > maxw then
+            -- Una palabra sola que no cabe (TERRATEMBLOR): se parte con guion, por
+            -- la letra que más equilibra (sólo entre letras ASCII, por los acentos).
+            -- Corte silábico sencillo: tras vocal y antes de consonante + vocal (TERRA-TEMBLOR).
+            local function vowel(ch) return ch and ("AEIOUaeiou"):find(string.char(ch), 1, true) ~= nil end
+            for k = 2, #name - 2 do
+                local c1, c2, c3 = name:byte(k), name:byte(k + 1), name:byte(k + 2)
+                if c1 < 128 and c2 < 128 and c1 ~= 32 and c2 ~= 32
+                   and vowel(c1) and not vowel(c2) and (vowel(c3) or (c3 and c3 >= 128)) then
+                    local l1, l2 = name:sub(1, k) .. "-", name:sub(k + 1)
+                    local wmax = math.max(PFn.width(l1, FS, 1), PFn.width(l2, FS, 1))
+                    if wmax < best then best, a, b = wmax, l1, l2 end
+                end
+            end
+        end
+        L = { a, (fw - PFn.width(a, FS, 1)) / 2, b, (fw - PFn.width(b, FS, 1)) / 2 }
+    end
+    byW[name] = L
+    return L
 end
 
 -- Botón de movimiento de Platino: contorno negro, marco del color del tipo con
@@ -333,11 +479,7 @@ end
 -- nombre centrado oscuro con sombra clara, etiqueta del tipo abajo a la izquierda.
 -- Sin PP: a la derecha, los puntos de nivel del movimiento.
 function R.moveButton(x, y, w, h, m, fused, active, cd)
-    local f = m and frameOf(m.type) or nil
-    if not f then
-        f = { bevel = "#9894b0", bevel2 = "#aca8c4", line = "#3e3a52", frame = "#6a6688", frameDark = "#4e4a68",
-              side = "#24202e", bottom = "#4a4664" }
-    end
+    local f = m and frameOf(m.type) or EMPTY_FRAME
     -- Sombra de la caja sobre el fondo
     lg.setColor(0, 0, 0, 0.35)
     lg.rectangle("fill", x + 1, y + 2, w, h, 3, 3)
@@ -345,8 +487,9 @@ function R.moveButton(x, y, w, h, m, fused, active, cd)
     U.setColor("#101010")
     lg.rectangle("fill", x, y, w, h, 3, 3)
     -- Tapa vista en perspectiva: cada fila un poco más ancha (esquinas en diagonal)
-    local lid = { { "#303132", 5 }, { "#86888b", 4 }, { "#f2f7ec", 3 }, { f.bevel, 2 }, { f.bevel2, 2 }, { f.bevel2, 1 }, { f.line, 1 } }
-    for i, row in ipairs(lid) do
+    local lid = lidOf(f)
+    for i = 1, #lid do
+        local row = lid[i]
         U.setColor(row[1])
         lg.rectangle("fill", x + row[2], y + i - 1, w - row[2] * 2, 1)
     end
@@ -388,50 +531,30 @@ function R.moveButton(x, y, w, h, m, fused, active, cd)
         -- Mismo tipo de letra que el nombre del Pokémon (pixelada, sombra clara).
         -- Siempre al mismo tamaño: si no cabe en una línea, se parte en dos por el
         -- espacio que deja las dos líneas más equilibradas.
-        local name = fused and (m.name .. " +" .. (fused - 1)) or m.name
-        local PFn = G.PixelFont
-        local FS = 1.5                       -- tamaño intermedio de la fuente pixelada
-        local st = { s = FS, gap = 1, color = "#403f30", shadow = "#fbf6f0" }
-        local maxw = fw - 2
-        if PFn.width(name, FS, 1) <= maxw then
-            PFn.print(name, fx + (fw - PFn.width(name, FS, 1)) / 2, fy + 10, st)
+        local name = m.name
+        if fused then
+            local byN = FUSED_NAME[m.name]
+            if not byN then byN = {}; FUSED_NAME[m.name] = byN end
+            name = byN[fused]
+            if not name then name = m.name .. " +" .. (fused - 1); byN[fused] = name end
+        end
+        local PF = G.PixelFont
+        local L = nameLayout(name, fw)
+        if not L[3] then
+            PF.print(L[1], fx + L[2], fy + 10, NAME_ST)
         else
-            local best, a, b = math.huge, name, ""
-            local i = name:find(" ", 1, true)
-            while i do
-                local l1, l2 = name:sub(1, i - 1), name:sub(i + 1)
-                local wmax = math.max(PFn.width(l1, FS, 1), PFn.width(l2, FS, 1))
-                if wmax < best then best, a, b = wmax, l1, l2 end
-                i = name:find(" ", i + 1, true)
-            end
-            if best > maxw then
-                -- Una palabra sola que no cabe (TERRATEMBLOR): se parte con guion, por
-                -- la letra que más equilibra (sólo entre letras ASCII, por los acentos).
-                -- Corte silábico sencillo: tras vocal y antes de consonante + vocal (TERRA-TEMBLOR).
-                local function vowel(ch) return ch and ("AEIOUaeiou"):find(string.char(ch), 1, true) ~= nil end
-                for k = 2, #name - 2 do
-                    local c1, c2, c3 = name:byte(k), name:byte(k + 1), name:byte(k + 2)
-                    if c1 < 128 and c2 < 128 and c1 ~= 32 and c2 ~= 32
-                       and vowel(c1) and not vowel(c2) and (vowel(c3) or (c3 and c3 >= 128)) then
-                        local l1, l2 = name:sub(1, k) .. "-", name:sub(k + 1)
-                        local wmax = math.max(PFn.width(l1, FS, 1), PFn.width(l2, FS, 1))
-                        if wmax < best then best, a, b = wmax, l1, l2 end
-                    end
-                end
-            end
-            PFn.print(a, fx + (fw - PFn.width(a, FS, 1)) / 2, fy + 3, st)
-            PFn.print(b, fx + (fw - PFn.width(b, FS, 1)) / 2, fy + 16, st)
+            PF.print(L[1], fx + L[2], fy + 3, NAME_ST)
+            PF.print(L[3], fx + L[4], fy + 16, NAME_ST)
         end
         -- Etiqueta del tipo (fuente pixelada: mayúsculas sin tilde, como en el juego)
         local tn = U.TYPE_NAME[m.type] or m.type
-        local PF = G.PixelFont
         local tw = PF.width(tn, 1) + 10
         local bx, by = fx + 3, fy + fh - 13
         U.setColor(f.badgeEdge)
         lg.rectangle("fill", bx, by, tw, 13, 3, 3)
         U.setColor(f.badge)
         lg.rectangle("fill", bx + 1, by + 1, tw - 2, 11, 3, 3)
-        PF.print(tn, bx + 5, by + 3, { s = 1, color = "#ffffff", shadow = f.badgeEdge })
+        PF.print(tn, bx + 5, by + 3, f.badgeSt)
         -- Nivel del movimiento en vez de PP
         local dots = m.def.maxLvl
         for d = 1, dots do
@@ -467,6 +590,17 @@ UI.register("hud", hud)
 local cards = {}   -- pantalla genérica de cartas: { title, sub, list = {card...}, cb, focus }
 local cur = nil
 
+-- Opciones de texto reutilizadas (UI.text sólo las lee).
+local C_TITLE = { size = 12 }
+local C_DESC = { size = 10, color = UI.C.muted, w = 0 }
+local C_HEAD = { size = 16, color = UI.C.gold, w = W, align = "center" }
+local C_SUB = { size = 10, color = UI.C.muted, w = W - 20, align = "center" }
+local C_BACK = { size = 10 }
+local C_REROLL = { size = 10, color = "#3c6cc4", enabled = true }
+local C_BAN = { size = 10, color = "#d04848", enabled = true, on = false }
+local CARD_ID = {}                         -- "card1", "card2"...
+local REROLL_TXT, BAN_TXT = {}, {}
+
 local function drawCard(c, x, y, w, h, focused)
     local col = c.color or UI.C.line
     U.setColor(c.type == "evo" and "#2a2410" or UI.C.panel)
@@ -479,12 +613,17 @@ local function drawCard(c, x, y, w, h, focused)
     lg.rectangle("fill", x + 6, y + 6, h - 12, h - 12, 4, 4)
     G.Icons.draw(c.icon or "star", x + 6 + (h - 12 - 24) / 2, y + 6 + (h - 12 - 24) / 2, 24)
     local tx = x + h + 2
-    UI.text(c.title, tx, y + 5, { size = 12 })
+    UI.text(c.title, tx, y + 5, C_TITLE)
     if c.tag then
-        local tw = UI.textWidth(c.title, 12)
+        -- Ancho del título y texto de la carta: una vez por carta (no en cada fotograma).
+        local tw = c.__tw
+        if not tw then tw = UI.textWidth(c.title, 12); c.__tw = tw end
         UI.chip(c.tag, tx + tw + 6, y + 6, c.type == "stat" and (c.color == "#ffd23f" and "#ffd23f" or "#9fb1c9") or col, 10)
     end
-    UI.text((c.desc or "") .. (c.desc2 and (" " .. c.desc2) or ""), tx, y + 22, { size = 10, color = UI.C.muted, w = w - (tx - x) - 6 })
+    local desc = c.__desc
+    if not desc then desc = (c.desc or "") .. (c.desc2 and (" " .. c.desc2) or ""); c.__desc = desc end
+    C_DESC.w = w - (tx - x) - 6
+    UI.text(desc, tx, y + 22, C_DESC)
     lg.setColor(1, 1, 1, 1)
 end
 
@@ -495,8 +634,8 @@ end
 
 function cards.draw()
     if not cur then return end
-    UI.text(cur.title or "", 0, 4, { size = 16, color = UI.C.gold, w = W, align = "center" })
-    if cur.sub then UI.text(cur.sub, 10, 24, { size = 10, color = UI.C.muted, w = W - 20, align = "center" }) end
+    UI.text(cur.title or "", 0, 4, C_HEAD)
+    if cur.sub then UI.text(cur.sub, 10, 24, C_SUB) end
     local n = #cur.list
     local top = cur.sub and 40 or 28
     local tools = cur.opts ~= nil                 -- repetir / vetar
@@ -511,14 +650,21 @@ function cards.draw()
             lg.rectangle("fill", 8, y, W - 16, h, 6, 6)
             lg.setColor(1, 1, 1, 1)
         end
-        UI.hitbox("card" .. i, 8, y, W - 16, h)
+        local id = CARD_ID[i]
+        if not id then id = "card" .. i; CARD_ID[i] = id end
+        UI.hitbox(id, 8, y, W - 16, h)
     end
-    if cur.back then UI.button("back", W / 2 - 50, H - 28, 100, 22, "Atrás", { size = 10 }) end
+    if cur.back then UI.button("back", W / 2 - 50, H - 28, 100, 22, "Atrás", C_BACK) end
     if tools then
         local rr, bb = cur.opts.left()
-        UI.button("reroll", 8, H - 27, 148, 22, "Repetir (" .. rr .. ")", { size = 10, color = "#3c6cc4", enabled = rr > 0 })
-        UI.button("ban", W - 156, H - 27, 148, 22, cur.banning and "Toca la carta a vetar" or ("Vetar (" .. bb .. ")"),
-                  { size = 10, color = "#d04848", enabled = bb > 0, on = cur.banning })
+        local rt = REROLL_TXT[rr]
+        if not rt then rt = "Repetir (" .. rr .. ")"; REROLL_TXT[rr] = rt end
+        local bt = BAN_TXT[bb]
+        if not bt then bt = "Vetar (" .. bb .. ")"; BAN_TXT[bb] = bt end
+        C_REROLL.enabled = rr > 0
+        UI.button("reroll", 8, H - 27, 148, 22, rt, C_REROLL)
+        C_BAN.enabled, C_BAN.on = bb > 0, cur.banning
+        UI.button("ban", W - 156, H - 27, 148, 22, cur.banning and "Toca la carta a vetar" or bt, C_BAN)
     end
 end
 
@@ -625,20 +771,41 @@ end
 -- ---------------- pausa ----------------
 
 local pause = {}
+-- Los textos de la pausa no cambian mientras está abierta (el reloj está parado):
+-- se hacen al entrar (la cabecera y, por movimiento, { icono, texto }).
+local P_TITLE = { size = 22, w = W, align = "center" }
+local P_HEAD = { size = 12, color = UI.C.muted, w = W, align = "center" }
+local P_MOVE = { size = 10 }
+local P_RESUME = { color = "#3c9c54", size = 12 }
+local P_QUIT = { color = "#3a1b22", size = 12 }
+local pausePl, pauseHead, pauseMoves, pauseSec = nil, "", {}, -1
+function pause.enter()
+    local pl = G.Game.player()
+    pausePl = pl
+    pauseMoves = {}
+    if not pl then return end
+    pauseSec = math.floor(G.Game.time())
+    pauseHead = pl.mon.name .. " · Nv. " .. pl.level .. " · " .. U.mmss(G.Game.time())
+    for i, m in ipairs(pl.moves) do
+        pauseMoves[i] = { "move:" .. m.id, m.name .. "  Nv." .. m.lvl .. (m.evolved and "  (evolucionado)" or "") }
+    end
+end
 function pause.draw()
-    UI.text("PAUSA", 0, 30, { size = 22, w = W, align = "center" })
+    UI.text("PAUSA", 0, 30, P_TITLE)
     local pl = G.Game.player()
     if pl then
-        UI.text(pl.mon.name .. " · Nv. " .. pl.level .. " · " .. U.mmss(G.Game.time()), 0, 62, { size = 12, color = UI.C.muted, w = W, align = "center" })
+        if pl ~= pausePl or math.floor(G.Game.time()) ~= pauseSec then pause.enter() end
+        UI.text(pauseHead, 0, 62, P_HEAD)
         local y = 86
-        for i, m in ipairs(pl.moves) do
-            G.Icons.draw("move:" .. m.id, 40, y, 14)
-            UI.text(m.name .. "  Nv." .. m.lvl .. (m.evolved and "  (evolucionado)" or ""), 60, y, { size = 10 })
+        for i = 1, #pauseMoves do
+            local pm = pauseMoves[i]
+            G.Icons.draw(pm[1], 40, y, 14)
+            UI.text(pm[2], 60, y, P_MOVE)
             y = y + 16
         end
     end
-    UI.button("resume", 40, 170, 240, 26, "Continuar", { color = "#3c9c54", size = 12 })
-    UI.button("quit", 40, 204, 240, 26, "Abandonar run", { color = "#3a1b22", size = 12 })
+    UI.button("resume", 40, 170, 240, 26, "Continuar", P_RESUME)
+    UI.button("quit", 40, 204, 240, 26, "Abandonar run", P_QUIT)
 end
 function pause.touch(x, y)
     local id = UI.hit(x, y)
@@ -656,17 +823,21 @@ function R.showPause() UI.show("pause") end
 
 local over = {}
 local overData, overCb = nil, nil
-function over.enter(d) overData = d.r; overCb = d.cb; G.Audio.sfx("confirm") end
-function over.draw()
-    local r = overData
-    if not r then return end
+-- El resumen no cambia: al entrar se prepara la lista de textos { texto, x, y, opts }
+-- y en cada fotograma sólo se dibuja.
+local overItems = {}
+local O_BACK = { size = 12, color = "#3c9c54" }
+local function buildOver(r)
+    local items = {}
+    local function put(text, x, y, opts) items[#items + 1] = { text, x, y, opts } end
     local title = r.won and "¡Fase superada!" or (r.dead and "Has caído..." or "Run terminada")
-    UI.text(title, 0, 6, { size = 22, color = r.won and UI.C.green or (r.dead and UI.C.red or UI.C.gold), w = W, align = "center" })
-    if r.stage then UI.text(r.stage .. ((r.form or 1) > 1 and ("  ·  " .. r.name) or ""), 0, 30, { size = 10, color = UI.C.muted, w = W, align = "center" }) end
+    put(title, 0, 6, { size = 22, color = r.won and UI.C.green or (r.dead and UI.C.red or UI.C.gold), w = W, align = "center" })
+    if r.stage then put(r.stage .. ((r.form or 1) > 1 and ("  ·  " .. r.name) or ""), 0, 30, { size = 10, color = UI.C.muted, w = W, align = "center" }) end
     local y = 44
+    local LABEL = { size = 12, color = UI.C.muted }
     local function row(label, value, col)
-        UI.text(label, 24, y, { size = 12, color = UI.C.muted })
-        UI.text(value, 150, y, { size = 12, color = col or UI.C.text })
+        put(label, 24, y, LABEL)
+        put(value, 150, y, { size = 12, color = col or UI.C.text })
         y = y + 16
     end
     row("Tiempo", U.mmss(r.time))
@@ -678,23 +849,36 @@ function over.draw()
         row("Ante Arceus", U.mmss(r.judge.time) .. " · " .. r.judge.bosses .. (r.judge.bosses == 1 and " legendario" or " legendarios"), UI.C.gold)
     end
     row("Pokémonedas", "+" .. r.coins, UI.C.gold)
-    UI.text(r.breakdown or "", 150, y - 2, { size = 10, color = UI.C.muted, w = 160 })
+    put(r.breakdown or "", 150, y - 2, { size = 10, color = UI.C.muted, w = 160 })
     y = y + (UI.textWidth(r.breakdown or "", 10) > 160 and 24 or 14)
     if (r.t1 or 0) > 0 or (r.t10 or 0) > 0 then
         row("Tickets", (r.t1 > 0 and ("+" .. r.t1 .. " ") or "") .. (r.t10 > 0 and ("+" .. r.t10 .. " x10") or ""), UI.C.purple)
     end
     local mv = {}
     for i, m in ipairs(r.moves or {}) do mv[i] = m.name .. " Nv." .. m.lvl end
-    UI.text("Movimientos: " .. (#mv > 0 and table.concat(mv, " · ") or "—"), 24, y, { size = 10, color = UI.C.muted, w = W - 48 })
+    put("Movimientos: " .. (#mv > 0 and table.concat(mv, " · ") or "—"), 24, y, { size = 10, color = UI.C.muted, w = W - 48 })
     y = y + 24
     if r.caught and #r.caught > 0 then
         local names = {}
         for i, c in ipairs(r.caught) do names[i] = G.DEX_BY[c.dex].name .. (c.isNew and " (¡nuevo!)" or "") end
-        UI.text("Shinies: " .. table.concat(names, ", "), 24, y, { size = 10, color = UI.C.blue, w = W - 48 })
+        put("Shinies: " .. table.concat(names, ", "), 24, y, { size = 10, color = UI.C.blue, w = W - 48 })
         y = y + 14
     end
-    if r.record then UI.text("¡Nuevo récord de tiempo!", 0, y, { size = 12, color = UI.C.gold, w = W, align = "center" }) end
-    UI.button("back", 60, H - 32, 200, 26, "Volver al menú", { size = 12, color = "#3c9c54" })
+    if r.record then put("¡Nuevo récord de tiempo!", 0, y, { size = 12, color = UI.C.gold, w = W, align = "center" }) end
+    return items
+end
+function over.enter(d)
+    overData = d.r; overCb = d.cb
+    overItems = overData and buildOver(overData) or {}
+    G.Audio.sfx("confirm")
+end
+function over.draw()
+    if not overData then return end
+    for i = 1, #overItems do
+        local it = overItems[i]
+        UI.text(it[1], it[2], it[3], it[4])
+    end
+    UI.button("back", 60, H - 32, 200, 26, "Volver al menú", O_BACK)
 end
 function over.touch(x, y)
     if UI.hit(x, y) == "back" and overCb then local cb = overCb; overCb = nil; cb() end
