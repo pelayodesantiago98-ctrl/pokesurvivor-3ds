@@ -203,6 +203,8 @@ local dataOrder = {}                         -- claves en orden de creación (se
 local MAX_DATA = 120
 local broken = {}                            -- props destruidos: clave de tile -> true
 local nextPropId = 1
+local propsVer = 0                           -- sube al cambiar los objetos a la vista (chunk nuevo, bioma...)
+local candL, candR, candT, candB = 0, -1, 0, -1   -- rectángulo de candidatos visibles (W.visibleSplit)
 
 -- Claves numéricas (nada de concatenar strings por fotograma).
 local function ckey(cx, cy) return cx * 100003 + cy end
@@ -210,11 +212,20 @@ local function tkey(tx, ty) return tx * 1000003 + ty end
 
 -- ---------------- ruido ----------------
 
+-- Las casillas vecinas caen casi siempre en la misma celda del ruido: se guardan
+-- los 4 hashes de la última celda de cada semilla (mismo resultado, menos hashes).
+local nmx, nmy, nma, nmb, nmc, nmd = {}, {}, {}, {}, {}, {}
 local function vnoise(x, y, s)
     local xi, yi = floor(x), floor(y)
     local xf, yf = x - xi, y - yi
     local u, v = xf * xf * (3 - 2 * xf), yf * yf * (3 - 2 * yf)
-    local a, b, c, d = H(xi, yi, s), H(xi + 1, yi, s), H(xi, yi + 1, s), H(xi + 1, yi + 1, s)
+    local a, b, c, d
+    if nmx[s] == xi and nmy[s] == yi then
+        a, b, c, d = nma[s], nmb[s], nmc[s], nmd[s]
+    else
+        a, b, c, d = H(xi, yi, s), H(xi + 1, yi, s), H(xi, yi + 1, s), H(xi + 1, yi + 1, s)
+        nmx[s], nmy[s], nma[s], nmb[s], nmc[s], nmd[s] = xi, yi, a, b, c, d
+    end
     return (a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v
 end
 local function fbm(x, y, s)
@@ -257,6 +268,23 @@ local function terrainRaw(tx, ty)
     -- (Sin formaciones rocosas en el mapa normal: quedaban como bloques planos.
     -- Los árboles hacen de obstáculo. Las arenas de las grietas sí tienen muro.)
     return FLOOR
+end
+
+-- Caché del terreno puro por casilla: al generar un trozo, cada casilla se
+-- consultaba ~20 veces (huecos libres alrededor de árboles, matas, interactivos)
+-- y cada consulta son 8 hashes de ruido. Se vacía con la de piezas (nueva semilla,
+-- arena) y al pasar de un tope de memoria (todo es recalculable).
+local terrCache, terrN = {}, 0
+local specCache = {}                         -- casillas sin interactivo (specialRaw): true
+local function terrainC(tx, ty)
+    local k = tx * 1000003 + ty
+    local t = terrCache[k]
+    if t then return t end
+    t = terrainRaw(tx, ty)
+    terrN = terrN + 1
+    if terrN > 60000 then terrCache = {}; specCache = {}; terrN = 1 end
+    terrCache[k] = t
+    return t
 end
 
 -- Mancha de tierra: booleano por tile (en la web era un campo por píxel).
@@ -311,12 +339,13 @@ local candCache, pieceCache = {}, {}
 local cacheN = 0
 local function clearPieceCache()
     candCache, pieceCache, cacheN = {}, {}, 0
+    terrCache, terrN, specCache = {}, 0, {}
 end
 
 local function openAt(tx, ty)
     for b = -1, 1 do
         for a = -1, 1 do
-            if terrainRaw(tx + a, ty + b) ~= FLOOR then return false end
+            if terrainC(tx + a, ty + b) ~= FLOOR then return false end
         end
     end
     return true
@@ -324,10 +353,12 @@ end
 
 -- Interactivos (altar, manantial, cofre grande, trampa): raros, lejos del inicio.
 local function specialRaw(tx, ty)
+    local k = tx * 1000003 + ty
+    if specCache[k] then return nil end
     local hs = H(tx, ty, seed + 909)
-    if hs >= 0.0032 then return nil end
+    if hs >= 0.0032 then specCache[k] = true return nil end
     if U.hypot(tx, ty) <= 12 or arenaDist(tx, ty) < arenaOuter() + 2 then return nil end
-    if terrainRaw(tx, ty) ~= FLOOR or not openAt(tx, ty) then return nil end
+    if terrainC(tx, ty) ~= FLOOR or not openAt(tx, ty) then return nil end
     local typ = hs < 0.0004 and 'altar' or hs < 0.0008 and 'spring' or hs < 0.0011 and 'bigchest' or 'trap'
     return typ, floor(H(tx, ty, seed + 910) * (typ == 'altar' and 4 or 3))
 end
@@ -354,7 +385,7 @@ local function candRaw(tx, ty)
     cacheN = cacheN + 1
     if cacheN > 40000 then clearPieceCache(); cacheN = 1 end
     c = false
-    if U.hypot(tx, ty) >= 7 and terrainRaw(tx, ty) == FLOOR and openAt(tx, ty) then
+    if U.hypot(tx, ty) >= 7 and terrainC(tx, ty) == FLOOR and openAt(tx, ty) then
         local typ, kind = nil, 0
         local h = H(tx, ty, seed + 404)
         local ad = arenaDist(tx, ty)
@@ -427,9 +458,10 @@ local function nearPiece(tx, ty)
     return false
 end
 
-local function placeProps(c)
+-- Objetos de la fila j del chunk (se genera por filas: ver chunkData).
+local function placePropsRow(c, j)
     local terr, props, propAt = c.terr, c.props, c.propAt
-    for j = 0, N - 1 do
+    do
         for i = 0, N - 1 do
             local lidx = j * N + i + 1
             if terr[lidx] == FLOOR then
@@ -440,7 +472,7 @@ local function placeProps(c)
                     local open = true
                     for b = -1, 1 do
                         for a = -1, 1 do
-                            if terrainRaw(tx + a, ty + b) ~= FLOOR then open = false break end
+                            if terrainC(tx + a, ty + b) ~= FLOOR then open = false break end
                         end
                         if not open then break end
                     end
@@ -488,6 +520,7 @@ local function placeProps(c)
                         props[#props + 1] = p
                         if p.solid then propAt[lidx] = p end
                         if typ == 'tree' then c.trees[#c.trees + 1] = p end
+                        if typ == 'grass' or typ == 'tuft' then c.grassAt[lidx] = p end   -- (W.rustle)
                     end
                 end
             end
@@ -499,33 +532,113 @@ end
 
 local dropBatch                              -- (definida más abajo, en dibujo)
 
-local function chunkData(cx, cy)
-    local k = ckey(cx, cy)
-    local c = data[k]
-    if c then return c end
-    c = { cx = cx, cy = cy, key = k, terr = {}, dirt = {}, props = {}, propAt = {}, liquids = {}, trees = {} }
-    local terr, dirt, liquids = c.terr, c.dirt, c.liquids
-    local nl = 0
-    for j = 0, N - 1 do
+-- Un chunk se genera en 2·N pasos: N filas de terreno y luego N filas de objetos
+-- (los objetos miran el terreno de las casillas vecinas). Generar uno entero son
+-- ~60 ms en la consola: W.update adelanta los de alrededor de la cámara paso a
+-- paso, con un tope de tiempo por fotograma (prefetch), y así al llegar ya están.
+-- Si alguien pide un chunk que aún no está, se termina en el acto.
+local pend = nil                             -- chunk a medio generar (aún no está en `data`)
+local prefetchDone = false                   -- todo lo de alrededor de la cámara ya está
+local function newChunk(cx, cy, k)
+    return { cx = cx, cy = cy, key = k, terr = {}, dirt = {}, props = {}, propAt = {}, liquids = {}, trees = {},
+             grassAt = {}, step = 0 }
+end
+
+-- Un paso de la generación; devuelve true al acabar.
+local function genStep(c)
+    local s = c.step
+    if s < N then
+        local j = s
+        local terr, dirt, liquids = c.terr, c.dirt, c.liquids
+        local nl = #liquids
+        local cx, cy = c.cx, c.cy
         for i = 0, N - 1 do
             local tx, ty = cx * N + i, cy * N + j
-            local t = terrainRaw(tx, ty)
+            local t = terrainC(tx, ty)
             local idx = j * N + i + 1
             terr[idx] = t
             dirt[idx] = dirtRaw(tx, ty)
             if t == LIQUID then liquids[nl + 1] = tx; liquids[nl + 2] = ty; nl = nl + 2 end
         end
+    else
+        placePropsRow(c, s - N)
     end
+    c.step = s + 1
+    return c.step >= 2 * N
+end
+
+-- Mete un chunk terminado en `data` (desalojando el más viejo si hace falta).
+local function commitChunk(c)
+    c.step = nil
     if #dataOrder >= MAX_DATA then
         local old = table.remove(dataOrder, 1)
         data[old] = nil
         dropBatch(old)
+        prefetchDone = false
     end
-    data[k] = c
-    dataOrder[#dataOrder + 1] = k
-    placeProps(c)
+    data[c.key] = c
+    dataOrder[#dataOrder + 1] = c.key
+    -- Sólo cambia lo visible si el chunk cae en el rectángulo de candidatos.
+    local x0, y0 = c.cx * CW, c.cy * CW
+    if x0 < candR and x0 + CW > candL and y0 < candB and y0 + CW > candT then propsVer = propsVer + 1 end
+end
+
+local function chunkData(cx, cy)
+    local k = ckey(cx, cy)
+    local c = data[k]
+    if c then return c end
+    if pend and pend.key == k then
+        c = pend; pend = nil
+    else
+        c = newChunk(cx, cy, k)
+    end
+    while not genStep(c) do end
+    commitChunk(c)
     return c
 end
+
+-- Adelanta la generación de los chunks alrededor de (x, y) hasta gastar `budget`
+-- segundos. Cubre la vista y el anillo donde aparecen los enemigos.
+local prefetch
+do
+local PREFETCH_R = 900
+local pfX, pfY = nil, nil                     -- chunk de la cámara del último barrido completo
+local getTime = love.timer.getTime
+prefetch = function(x, y, budget)
+    local ccx, ccy = floor(x / CW), floor(y / CW)
+    if prefetchDone and pfX == ccx and pfY == ccy and not pend then return end
+    local t0 = getTime()
+    while true do
+        if not pend then
+            -- El que falte más cerca del centro.
+            local best, bd, bx, by = nil, huge, 0, 0
+            for cy = floor((y - PREFETCH_R) / CW), floor((y + PREFETCH_R) / CW) do
+                for cx = floor((x - PREFETCH_R) / CW), floor((x + PREFETCH_R) / CW) do
+                    local k = cx * 100003 + cy
+                    if not data[k] then
+                        local dx, dy = (cx + 0.5) * CW - x, (cy + 0.5) * CW - y
+                        local d = dx * dx + dy * dy
+                        if d < bd then bd = d; best = k; bx, by = cx, cy end
+                    end
+                end
+            end
+            if not best then
+                prefetchDone, pfX, pfY = true, ccx, ccy
+                return
+            end
+            pend = newChunk(bx, by, best)
+            prefetchDone = false
+        end
+        if genStep(pend) then
+            local c = pend
+            pend = nil
+            commitChunk(c)
+        end
+        if getTime() - t0 >= budget then return end
+    end
+end
+
+end -- (prefetch)
 
 local function terrainAt(tx, ty)
     local cx, cy = floor(tx / N), floor(ty / N)
@@ -633,6 +746,7 @@ function W.isFree(x, y, r, allowLiquid)
 end
 
 local function clearList(t) for i = #t, 1, -1 do t[i] = nil end end
+local flashing = {}                          -- objetos con destello (p.flash > 0), ver W.update
 
 -- Objetos destructibles (incluida la hierba) que tocan un círculo.
 -- La tabla devuelta se REUTILIZA en la siguiente llamada (o pasa la tuya en `out`).
@@ -811,12 +925,89 @@ function W.propSortY(p)
     return p.y
 end
 
+-- Salida rápida de W.collide en campo abierto: cada chunk tiene una rejilla de
+-- celdas de COLC x COLC unidades marcadas si algo sólido (pared, objeto sólido,
+-- caja o puente de árbol) o líquido queda a menos de COL_M de la celda. Si el
+-- centro de la entidad cae en una celda sin marcar, no puede tocar nada (para
+-- radios <= COL_MAXR: el margen cubre radio + radio del objeto, que es <= 22).
+-- Lo roto no se desmarca (sólo sería más lento, no distinto). Las cajas de los
+-- árboles dependen del bioma: la rejilla se rehace al cambiarlo.
+do
+local COLC = 128
+local COLN = CW / COLC                       -- celdas por lado de chunk (4)
+local COL_MAXR = 48
+local COL_M = COL_MAXR + 24
+local function colMark(grid, c, x0, y0, x1, y1)
+    local ox, oy = c.cx * CW, c.cy * CW
+    local i0, i1 = floor((x0 - COL_M - ox) / COLC), floor((x1 + COL_M - ox) / COLC)
+    local j0, j1 = floor((y0 - COL_M - oy) / COLC), floor((y1 + COL_M - oy) / COLC)
+    if i0 < 0 then i0 = 0 end
+    if j0 < 0 then j0 = 0 end
+    if i1 > COLN - 1 then i1 = COLN - 1 end
+    if j1 > COLN - 1 then j1 = COLN - 1 end
+    for j = j0, j1 do
+        for i = i0, i1 do grid[j * COLN + i + 1] = true end
+    end
+end
+local function colGrid(c)
+    if c.colBiome == biome then return c end
+    local solid, liq = {}, {}
+    -- Paredes y líquido del chunk y de una franja de los vecinos (lo que queda a
+    -- menos de COL_M del borde).
+    local B = floor(COL_M / TS) + 1
+    for ty = c.cy * N - B, c.cy * N + N - 1 + B do
+        for tx = c.cx * N - B, c.cx * N + N - 1 + B do
+            local t = terrainAt(tx, ty)
+            if t ~= FLOOR then
+                local x0, y0 = tx * TS, ty * TS
+                colMark(t == WALL and solid or liq, c, x0, y0, x0 + TS, y0 + TS)
+            end
+        end
+    end
+    -- Objetos sólidos y árboles (con sus puentes) de éste y de los vecinos, que
+    -- pueden asomar a éste (las copas, sobre todo).
+    for b = -1, 1 do
+        for a = -1, 1 do
+            local o = chunkData(c.cx + a, c.cy + b)
+            local props = o.props
+            for k = 1, #props do
+                local p = props[k]
+                if p.solid then
+                    local boxes, ext = nil, nil
+                    if p.type == 'tree' then boxes, ext = treeShape(p) end
+                    if boxes then
+                        colMark(solid, c, ext[1], ext[2], ext[3], ext[4])
+                    else
+                        -- Redondo (rocas, cofres... y árboles sin caja).
+                        colMark(solid, c, p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r)
+                    end
+                end
+            end
+        end
+    end
+    c.colSolid, c.colLiq, c.colBiome = solid, liq, biome
+    return c
+end
+
 -- Empuja un círculo fuera de paredes y objetos sólidos (deslizando).
 -- Devuelve true si ha chocado con algo.
 function W.collide(e)
     local r = e.r
     local hit = false
-    for _ = 1, 2 do
+    if r <= COL_MAXR then
+        local x, y = e.x, e.y
+        local cx, cy = floor(x / CW), floor(y / CW)
+        local c = data[cx * 100003 + cy] or chunkData(cx, cy)
+        if c.colBiome ~= biome then colGrid(c) end
+        local cell = floor((y - cy * CW) / COLC) * COLN + floor((x - cx * CW) / COLC) + 1
+        if not c.colSolid[cell] and not (c.colLiq[cell] and W.liquidSolidFor(e)) then return false end
+    end
+    -- La lava (mar de lava) no se pisa salvo los de tipo Fuego, y éstos no pisan
+    -- el agua: para quien no puede, el líquido cuenta como pared.
+    local lavaSolid = W.liquidSolidFor(e)
+    for pass = 1, 2 do
+        -- La 2.ª pasada sólo sirve si la 1.ª ha movido algo (si no, daría lo mismo).
+        if pass == 2 and not hit then break end
         -- +1 casilla alrededor (y más hacia abajo y a los lados: la copa de un árbol
         -- ocupa varias casillas por encima y a los lados de su pie).
         local t0x, t1x, t0y, t1y = tileOf(e.x - r) - 1, tileOf(e.x + r) + 1, tileOf(e.y - r) - 1, tileOf(e.y + r) + 1
@@ -828,7 +1019,10 @@ function W.collide(e)
                 local c = data[cx * 100003 + cy] or chunkData(cx, cy)
                 local trees = c.trees
                 for k = 1, #trees do
-                    local boxes, ext = treeShape(trees[k])
+                    local tp = trees[k]
+                    local boxes, ext
+                    if tp.shapeBiome == biome then boxes, ext = tp.shape, tp.shapeExt
+                    else boxes, ext = treeShape(tp) end
                     if boxes and e.x + r > ext[1] and e.x - r < ext[3] and e.y + r > ext[2] and e.y - r < ext[4] then
                         for b = 1, #boxes do
                             local bx = boxes[b]
@@ -839,12 +1033,16 @@ function W.collide(e)
                 end
             end
         end
-        -- La lava (mar de lava) no se pisa salvo los de tipo Fuego, y éstos no pisan
-        -- el agua: para quien no puede, el líquido cuenta como pared.
-        local lavaSolid = W.liquidSolidFor(e)
+        -- Casillas alrededor: el chunk se busca sólo cuando cambia.
+        local lk, lc = nil, nil
         for ty = t0y, t1y do
+            local cy = floor(ty / N)
             for tx = t0x, t1x do
-                local tt = terrainAt(tx, ty)
+                local cx = floor(tx / N)
+                local k = cx * 100003 + cy
+                if k ~= lk then lk = k; lc = data[k] or chunkData(cx, cy) end
+                local idx = (ty - cy * N) * N + (tx - cx * N) + 1
+                local tt = lc.terr[idx]
                 if (tt == WALL or (lavaSolid and tt == LIQUID)) and abs(tx * TS + TS / 2 - e.x) < r + TS and abs(ty * TS + TS / 2 - e.y) < r + TS then
                     -- Punto más cercano de la caja del tile al centro del círculo.
                     local bx0, by0 = tx * TS, ty * TS
@@ -868,8 +1066,8 @@ function W.collide(e)
                         end
                     end
                 end
-                local p = propAtTile(tx, ty)
-                if p and p.solid and not treeBox(p) then
+                local p = lc.propAt[idx]
+                if p and p.solid and (p.type ~= 'tree' or not treeBox(p)) then
                     local dx, dy = e.x - p.x, e.y - p.y
                     local mn = r + p.r
                     local d2 = dx * dx + dy * dy
@@ -885,6 +1083,8 @@ function W.collide(e)
     end
     return hit
 end
+
+end -- (colisión)
 
 -- Depuración (`--treetest`): empuja un círculo contra el primer árbol con caja desde
 -- abajo, arriba y la izquierda, y devuelve dónde se queda frente a la caja.
@@ -948,7 +1148,9 @@ local function destroyProp(p)
             if props[i] == p then props[i] = props[#props]; props[#props] = nil break end
         end
         c.propAt[(p.ty - c.cy * N) * N + (p.tx - c.cx * N) + 1] = nil
+        c.grassAt[(p.ty - c.cy * N) * N + (p.tx - c.cx * N) + 1] = nil
     end
+    -- (Sin tocar propsVer: W.visibleSplit se salta los que tienen p.gone.)
     local B = BIOMES[biome]
     local typ = p.type
     G.Audio.sfx(typ == 'grass' and 'grass' or typ == 'chest' and 'chest' or 'break')
@@ -999,6 +1201,7 @@ end
 function W.damageProp(p, amount, color)
     if not p.destructible or p.hp <= 0 then return false end
     p.hp = p.hp - amount
+    if p.flash <= 0 then flashing[#flashing + 1] = p end
     p.flash = 0.08
     if p.type ~= 'grass' then G.FX.spark(p.x, p.y - 10, color or '#ffffff', 0, -1, 3) end
     if p.hp <= 0 then destroyProp(p) return true end
@@ -1019,6 +1222,8 @@ function W.breakAt(tx, ty)
         end
     end
     if found then destroyProp(found) else broken[k] = true end
+    -- Si su chunk está a medio generar, se rehace (puede haber colocado ya el objeto).
+    if pend and pend.key == ckey(floor(tx / N), floor(ty / N)) then pend = nil end
 end
 
 function W.breakProp(p)
@@ -1126,35 +1331,51 @@ local function loadTileset(bi)
     return ts
 end
 
--- Batches por chunk (sólo los visibles). Cada entrada: { key, batch, used }.
--- Las entradas con key == nil están libres para reutilizar (sin crear objetos).
-local MAX_BATCHES = 96
-local batches = {}                           -- clave de chunk -> entrada
-local batchList = {}                         -- todas las entradas creadas
+-- Cada lote cubre un bloque de BW x BH baldosas del trozo (ver buildBatch). Van
+-- aquí arriba porque dropBatch usa SUBS (antes se declaraba después y dropBatch
+-- leía una global nil: al pasar de MAX_DATA chunks la partida se caía).
+local BW, BH = 8, 4
+local SUBX, SUBY = N / BW, N / BH
+local SUBS = SUBX * SUBY
 
-local function releaseBatches()
-    for i = 1, #batchList do
-        local e = batchList[i]
+-- Lotes por bloque (sólo los visibles), en dos reservas: la del suelo (clave
+-- ckey * SUBS + sub) y la del mar de lava animado (una por fotograma de la
+-- animación: (ckey * SUBS + sub) * 4 + f). Cada entrada: { key, batch, used, n }.
+-- Las entradas con key == nil están libres para reutilizar (sin crear objetos).
+local function newPool(cap, maxN) return { map = {}, list = {}, cap = cap, max = maxN } end
+local groundPool = newPool(BW * BH * 3, 96)
+local liqPool = newPool(BW * BH, 96)
+
+local function releasePool(pool)
+    local list = pool.list
+    for i = 1, #list do
+        local e = list[i]
         if e.batch.release then pcall(e.batch.release, e.batch) end
-        batchList[i] = nil
+        list[i] = nil
     end
-    for k in pairs(batches) do batches[k] = nil end
+    for k in pairs(pool.map) do pool.map[k] = nil end
 end
+local function releaseBatches() releasePool(groundPool); releasePool(liqPool) end
 
 -- Invalida los batches sin soltar los objetos (nueva semilla, arena...).
-local function invalidateBatches()
-    for i = 1, #batchList do batchList[i].key = nil end
-    for k in pairs(batches) do batches[k] = nil end
+local function invalidatePool(pool)
+    for i = 1, #pool.list do pool.list[i].key = nil end
+    for k in pairs(pool.map) do pool.map[k] = nil end
 end
+local function invalidateBatches() invalidatePool(groundPool); invalidatePool(liqPool) end
 
--- key es la del trozo (ckey); sus lotes son key * SUBS + sub.
+local function dropKey(pool, k)
+    local e = pool.map[k]
+    if e then pool.map[k] = nil; e.key = nil end
+end
+-- key es la del trozo (ckey).
 dropBatch = function(key)
     for h = 0, SUBS - 1 do
-        local e = batches[key * SUBS + h]
-        if e then batches[key * SUBS + h] = nil; e.key = nil end
+        local k = key * SUBS + h
+        dropKey(groundPool, k)
+        for f = 0, 3 do dropKey(liqPool, k * 4 + f) end
     end
 end
-
 local function releaseTileset()
     releaseBatches()
     if tileset then
@@ -1180,10 +1401,22 @@ end
 -- dibuja entero: así sólo se mandan los bloques visibles. (No se usa setDrawRange:
 -- en LÖVE Potion 3.0.2 SpriteBatch::Draw toma las posiciones de buffer[start] en vez
 -- de buffer[start * 6] y, con un rango que no empieza en 0, descoloca las baldosas.)
-local BW, BH = 8, 4
-local SUBX, SUBY = N / BW, N / BH
-local SUBS = SUBX * SUBY
-local function buildBatch(b, cx, cy, sub)
+-- Máscara de 8 vecinos de una baldosa de líquido.
+local function liquidMask(tx, ty)
+    local m = 0
+    if terrainAt(tx, ty - 1) == LIQUID then m = m + 1 end
+    if terrainAt(tx + 1, ty - 1) == LIQUID then m = m + 2 end
+    if terrainAt(tx + 1, ty) == LIQUID then m = m + 4 end
+    if terrainAt(tx + 1, ty + 1) == LIQUID then m = m + 8 end
+    if terrainAt(tx, ty + 1) == LIQUID then m = m + 16 end
+    if terrainAt(tx - 1, ty + 1) == LIQUID then m = m + 32 end
+    if terrainAt(tx - 1, ty) == LIQUID then m = m + 64 end
+    if terrainAt(tx - 1, ty - 1) == LIQUID then m = m + 128 end
+    return m
+end
+
+-- @param f  nil = el suelo; 0..3 = sólo el mar de lava animado, en ese fotograma
+local function buildBatch(b, cx, cy, sub, f)
     local ts = tileset
     b:clear()
     local c = chunkData(cx, cy)
@@ -1191,6 +1424,19 @@ local function buildBatch(b, cx, cy, sub)
     local fl, dq, wq, lq, shadow = ts.floor, ts.dirt, ts.wall, ts.liquid, ts.shadow
     local add = function(q, x, y) b:add(q, x, y) end
     local sx, sy = sub % SUBX, floor(sub / SUBX)
+    if f then
+        local quads = ts.liquidAnim[f]
+        for j = sy * BH, sy * BH + BH - 1 do
+            for i = sx * BW, sx * BW + BW - 1 do
+                if terr[j * N + i + 1] == LIQUID then
+                    local qd = quads[liquidMask(cx * N + i, cy * N + j)]
+                    if qd then add(qd, i * T, j * T) end
+                end
+            end
+        end
+        if b.flush then b:flush() end
+        return
+    end
     for j = sy * BH, sy * BH + BH - 1 do
         for i = sx * BW, sx * BW + BW - 1 do
             local tx, ty = cx * N + i, cy * N + j
@@ -1219,17 +1465,8 @@ local function buildBatch(b, cx, cy, sub)
                 if terrainAt(tx - 1, ty) == WALL then m = m + 8 end
                 local qd = wq[m]
                 if qd then add(qd, px, py) end
-            elseif not ts.liquidAnim then            -- (el animado se dibuja aparte)
-                local m = 0
-                if terrainAt(tx, ty - 1) == LIQUID then m = m + 1 end
-                if terrainAt(tx + 1, ty - 1) == LIQUID then m = m + 2 end
-                if terrainAt(tx + 1, ty) == LIQUID then m = m + 4 end
-                if terrainAt(tx + 1, ty + 1) == LIQUID then m = m + 8 end
-                if terrainAt(tx, ty + 1) == LIQUID then m = m + 16 end
-                if terrainAt(tx - 1, ty + 1) == LIQUID then m = m + 32 end
-                if terrainAt(tx - 1, ty) == LIQUID then m = m + 64 end
-                if terrainAt(tx - 1, ty - 1) == LIQUID then m = m + 128 end
-                local qd = lq[m]
+            elseif not ts.liquidAnim then            -- (el animado va en sus propios lotes)
+                local qd = lq[liquidMask(tx, ty)]
                 if qd then add(qd, px, py) end
             end
         end
@@ -1237,31 +1474,57 @@ local function buildBatch(b, cx, cy, sub)
     if b.flush then b:flush() end
 end
 
-local function chunkBatch(cx, cy, sub)
-    local k = ckey(cx, cy) * SUBS + sub
-    local now = U.now()
-    local e = batches[k]
-    if e then e.used = now return e.batch end
+-- Devuelve la entrada { key, batch, used, n } (n = sprites del lote).
+local drawTick = 0                           -- sube en cada W.drawGround (para "el menos usado")
+-- @param f  nil = lote del suelo; 0..3 = lote de lava de ese fotograma
+local function chunkBatch(cx, cy, sub, f)
+    local pool = f and liqPool or groundPool
+    local k = (cx * 100003 + cy) * SUBS + sub
+    if f then k = k * 4 + f end
+    local now = drawTick
+    local map, list = pool.map, pool.list
+    local e = map[k]
+    if e then e.used = now return e end
     -- Entrada libre, o nueva si hay hueco, o la menos usada.
-    for i = 1, #batchList do
-        if batchList[i].key == nil then e = batchList[i] break end
+    for i = 1, #list do
+        if list[i].key == nil then e = list[i] break end
     end
     if not e then
-        if #batchList < MAX_BATCHES then
-            e = { key = nil, batch = lg.newSpriteBatch(tileset.img, BW * BH * 3, 'static'), used = 0 }
-            batchList[#batchList + 1] = e
+        if #list < pool.max then
+            e = { key = nil, batch = lg.newSpriteBatch(tileset.img, pool.cap, 'static'), used = 0 }
+            list[#list + 1] = e
         else
-            e = batchList[1]
-            for i = 2, #batchList do
-                if batchList[i].used < e.used then e = batchList[i] end
+            e = list[1]
+            for i = 2, #list do
+                if list[i].used < e.used then e = list[i] end
             end
-            batches[e.key] = nil
+            map[e.key] = nil
         end
     end
     e.key = k; e.used = now
-    batches[k] = e
-    buildBatch(e.batch, cx, cy, sub)
-    return e.batch
+    map[k] = e
+    buildBatch(e.batch, cx, cy, sub, f)
+    e.n = e.batch.getCount and e.batch:getCount() or 0
+    return e
+end
+
+-- ¿Hay líquido en este bloque del chunk? (se calcula una vez por chunk y bloque)
+local function blockHasLiquid(c, sub)
+    local hl = c.liqSub
+    if not hl then hl = {}; c.liqSub = hl end
+    local v = hl[sub]
+    if v == nil then
+        v = false
+        local terr = c.terr
+        local sx, sy = sub % SUBX, floor(sub / SUBX)
+        for j = sy * BH, sy * BH + BH - 1 do
+            for i = sx * BW, sx * BW + BW - 1 do
+                if terr[j * N + i + 1] == LIQUID then v = true end
+            end
+        end
+        hl[sub] = v
+    end
+    return v
 end
 
 -- ---------------- dibujo ----------------
@@ -1274,6 +1537,7 @@ function W.drawGround(cam)
     local x0, x1 = floor(l / CW), floor((l + cam.w) / CW)
     local y0, y1 = floor(t / CW), floor((t + cam.h) / CW)
     lg.setColor(1, 1, 1, 1)
+    drawTick = drawTick + 1
     local r, bt = l + cam.w, t + cam.h
     local bw, bh = BW * TS, BH * TS
     for cy = y0, y1 do
@@ -1283,11 +1547,10 @@ function W.drawGround(cam)
                 local bx = cx * CW + (sub % SUBX) * bw
                 local by = cy * CW + floor(sub / SUBX) * bh
                 if bx < r and bx + bw > l and by < bt and by + bh > t then
-                    local b = chunkBatch(cx, cy, sub)
+                    local e = chunkBatch(cx, cy, sub)
                     -- 6 vértices por sprite (spritebatch.cpp); la cuenta global lo sabe.
-                    local n = b.getCount and b:getCount() or 0
-                    if not G_VERT_SPEND or G_VERT_SPEND(n * 6 - 4) then
-                        lg.draw(b, cx * CW, cy * CW, 0, SC, SC)
+                    if not G_VERT_SPEND or G_VERT_SPEND(e.n * 6 - 4) then
+                        lg.draw(e.batch, cx * CW, cy * CW, 0, SC, SC)
                     end
                 end
             end
@@ -1313,37 +1576,27 @@ function W.drawLiquid(cam, t)
     -- Vista con un margen de una baldosa (lo que antes miraba cam.sees).
     local vl, vr, vt, vb = l - TS, l + cam.w + TS, tp - TS, tp + cam.h + TS
     -- Mar de lava animado (como el mar de Diamante/Perla/Platino): 4 fotogramas.
+    -- Va en lotes por bloque como el suelo, uno por fotograma de la animación (se
+    -- hacen una vez y se reutilizan): antes era un lg.draw por baldosa de lava.
     local ts = tileset
     if ts and ts.liquidAnim then
-        local quads = ts.liquidAnim[floor(t * 3.5) % 4]
+        local f = floor(t * 3.5) % 4
         lg.setColor(1, 1, 1, 1)
+        local r, bt = l + cam.w, tp + cam.h
+        local bw, bh = BW * TS, BH * TS
         for cy = y0, y1 do
             for cx = x0, x1 do
                 local c = chunkData(cx, cy)
-                local list = c.liquids
-                local masks = c.liqMask
-                if not masks then
-                    masks = {}
-                    for i = 1, #list, 2 do
-                        local tx, ty = list[i], list[i + 1]
-                        local m = 0
-                        if terrainAt(tx, ty - 1) == LIQUID then m = m + 1 end
-                        if terrainAt(tx + 1, ty - 1) == LIQUID then m = m + 2 end
-                        if terrainAt(tx + 1, ty) == LIQUID then m = m + 4 end
-                        if terrainAt(tx + 1, ty + 1) == LIQUID then m = m + 8 end
-                        if terrainAt(tx, ty + 1) == LIQUID then m = m + 16 end
-                        if terrainAt(tx - 1, ty + 1) == LIQUID then m = m + 32 end
-                        if terrainAt(tx - 1, ty) == LIQUID then m = m + 64 end
-                        if terrainAt(tx - 1, ty - 1) == LIQUID then m = m + 128 end
-                        masks[i] = m
-                    end
-                    c.liqMask = masks
-                end
-                for i = 1, #list, 2 do
-                    local x, y = list[i] * TS, list[i + 1] * TS
-                    if x + TS > vl and x < vr and y + TS > vt and y < vb then
-                        local qd = quads[masks[i]]
-                        if qd then lg.draw(ts.img, qd, x, y, 0, SC, SC) end
+                if #c.liquids > 0 then
+                    for sub = 0, SUBS - 1 do
+                        local bx = cx * CW + (sub % SUBX) * bw
+                        local by = cy * CW + floor(sub / SUBX) * bh
+                        if bx < r and bx + bw > l and by < bt and by + bh > tp and blockHasLiquid(c, sub) then
+                            local e = chunkBatch(cx, cy, sub, f)
+                            if e.n > 0 and (not G_VERT_SPEND or G_VERT_SPEND(e.n * 6 - 4)) then
+                                lg.draw(e.batch, cx * CW, cy * CW, 0, SC, SC)
+                            end
+                        end
                     end
                 end
             end
@@ -1520,17 +1773,17 @@ function W.rustle(x, y, dt)
         for i = -1, 1 do
             local cx, cy = floor((tx + i) / N), floor((ty + j) / N)
             local c = chunkData(cx, cy)
-            for k = 1, #c.props do
-                local p = c.props[k]
-                if (p.type == 'grass' or p.type == 'tuft') and p.tx == tx + i and p.ty == ty + j then
-                    if p.tx == tx and p.ty == ty then
-                        if (p.rustle or 0) <= 0.05 and G.FX and G.FX.burst then
-                            G.FX.burst(p.x, p.y - 10, '#70c050', 3, 50)
-                        end
-                        p.rustle = 0.4
-                    elseif p.rustle and p.rustle > 0 then
-                        p.rustle = math.max(0, p.rustle - dt)
+            -- (Una mata como mucho por casilla: se mira directamente, sin recorrer
+            -- todos los objetos del chunk 9 veces.)
+            local p = c.grassAt[(ty + j - cy * N) * N + (tx + i - cx * N) + 1]
+            if p then
+                if i == 0 and j == 0 then
+                    if (p.rustle or 0) <= 0.05 and G.FX and G.FX.burst then
+                        G.FX.burst(p.x, p.y - 10, '#70c050', 3, 50)
                     end
+                    p.rustle = 0.4
+                elseif p.rustle and p.rustle > 0 then
+                    p.rustle = math.max(0, p.rustle - dt)
                 end
             end
         end
@@ -1709,6 +1962,143 @@ function W.drawProp(p, t)
     lg.setColor(1, 1, 1, 1)
 end
 
+-- ---------------- objetos visibles (con caché) ----------------
+-- W.visibleSplit(cam) -> (planos, ordenables): las dos tablas se REUTILIZAN.
+--   planos      van pegados al suelo y se dibujan antes que nadie (W.drawFlat):
+--               manantial, trampa, flores, matitas y, en los biomas de 4.ª gen, la
+--               hierba (allí es el mismo dibujo que una matita).
+--   ordenables  árboles, matas, rocas, cofres... YA ORDENADOS por W.propSortY
+--               (guardada en p._sy), para mezclarlos con las entidades sin
+--               reordenar todo cada fotograma.
+-- Lo que no se dibuja en este bioma (flores sin 4.ª gen, matas de ruta fuera de los
+-- biomas verdes) ni aparece.
+-- Los candidatos se buscan en un rectángulo algo mayor que la vista y sólo se
+-- rehacen al salirse la vista de él o al cambiar los objetos (propsVer); cada
+-- fotograma sólo se filtran esos candidatos.
+do
+local VIS_PADX, VIS_PADTOP, VIS_PADBOT = 70, 40, 160   -- (igual que W.visibleProps)
+local VIS_MARGIN = 128
+local candFlat, candSort = {}, {}
+local candVer = -1
+local flatOut, sortOut = {}, {}
+local function bySortY(a, b) return a._sy < b._sy end
+
+local function rebuildCandidates(l, t, r, b)
+    clearList(candFlat); clearList(candSort)
+    candL, candT = l - VIS_PADX - VIS_MARGIN, t - VIS_PADTOP - VIS_MARGIN
+    candR, candB = r + VIS_PADX + VIS_MARGIN, b + VIS_PADBOT + VIS_MARGIN
+    local g4 = grassGen4() and true or false
+    local decoOk = DECO_BIOME[biome] and deco() and true or false
+    local nf, ns = 0, 0
+    for cy = floor(candT / CW), floor(candB / CW) do
+        for cx = floor(candL / CW), floor(candR / CW) do
+            local props = chunkData(cx, cy).props
+            for i = 1, #props do
+                local p = props[i]
+                local x, y = p.x, p.y
+                if x > candL and x < candR and y > candT and y < candB then
+                    local ty = p.type
+                    if ty == 'flower' or ty == 'tuft' or (ty == 'grass' and g4) then
+                        if g4 then nf = nf + 1; candFlat[nf] = p end
+                    elseif p.flat then
+                        nf = nf + 1; candFlat[nf] = p
+                    elseif ty ~= 'deco' or decoOk then
+                        p._sy = W.propSortY(p)
+                        ns = ns + 1; candSort[ns] = p
+                    end
+                end
+            end
+        end
+    end
+    table.sort(candSort, bySortY)
+    candVer = propsVer
+end
+
+function W.visibleSplit(cam)
+    cam = cam or G.Camera
+    local l, t = cam.left(), cam.top()
+    local r, b = l + cam.w, t + cam.h
+    local x0, x1 = l - VIS_PADX, r + VIS_PADX
+    local y0, y1 = t - VIS_PADTOP, b + VIS_PADBOT
+    if candVer ~= propsVer or x0 < candL or x1 > candR or y0 < candT or y1 > candB then
+        rebuildCandidates(l, t, r, b)
+    end
+    clearList(flatOut); clearList(sortOut)
+    local n = 0
+    for i = 1, #candFlat do
+        local p = candFlat[i]
+        local x, y = p.x, p.y
+        if x > x0 and x < x1 and y > y0 and y < y1 and not p.gone then n = n + 1; flatOut[n] = p end
+    end
+    n = 0
+    for i = 1, #candSort do
+        local p = candSort[i]
+        local x, y = p.x, p.y
+        if x > x0 and x < x1 and y > y0 and y < y1 and not p.gone then n = n + 1; sortOut[n] = p end
+    end
+    return flatOut, sortOut
+end
+
+-- Dibuja los objetos planos. Las flores y matitas de 4.ª gen (casi todos los
+-- objetos a la vista) van en UN SpriteBatch que se rellena cada fotograma: una
+-- sola llamada de dibujo en vez de una (más su setColor) por objeto.
+local FLAT_CAP = 400
+local flatBatch, flatBatchImg = nil, nil
+function W.drawFlat(list, t)
+    t = t or U.now()
+    local g = grassGen4()
+    local b = nil
+    if g then
+        if flatBatchImg ~= g.img then
+            if flatBatch and flatBatch.release then pcall(flatBatch.release, flatBatch) end
+            -- (En la consola, 'static' como los lotes del suelo, que se sabe que va;
+            -- en el PC, 'dynamic', que se rellena cada fotograma sin atascar la GPU.)
+            flatBatch = lg.newSpriteBatch(g.img, FLAT_CAP, U.CONSOLE and 'static' or 'dynamic')
+            flatBatchImg = g.img
+        end
+        b = flatBatch
+        b:clear()
+    end
+    local nb = 0
+    for i = 1, #list do
+        local p = list[i]
+        local typ = p.type
+        if b and nb < FLAT_CAP and (typ == 'tuft' or typ == 'flower' or typ == 'grass') then
+            -- (Lo mismo que hace W.drawProp con ellas.)
+            local fr
+            if typ == 'tuft' or typ == 'grass' then
+                local r = p.rustle or 0
+                if r > 0 then
+                    p.rustle = max(0, r - love.timer.getDelta() / 2)
+                    fr = g.short[3 + floor(r * 10) % 2]
+                else
+                    fr = g.short[1 + floor(t * 1.5 + p.wiggle) % 2]
+                end
+            else
+                fr = g.flower[(p.kind or 0) * 2 + 1 + floor(t * 2 + p.wiggle) % 2]
+            end
+            if fr then
+                if not p._gx then p._gx, p._gy = U.snap(p.x - 8 * SC), U.snap(p.y + 4 - 16 * SC) end
+                -- El lote se dibuja a escala SC: posiciones en píxeles de arte.
+                b:add(fr, p._gx / SC, p._gy / SC)
+                nb = nb + 1
+            end
+        else
+            W.drawProp(p, t)
+        end
+    end
+    if nb > 0 then
+        if b.flush then b:flush() end
+        lg.setColor(1, 1, 1, 1)
+        -- 6 vértices por sprite (spritebatch.cpp); la cuenta global lo sabe.
+        if not G_VERT_SPEND or G_VERT_SPEND(nb * 6 - 4) then
+            lg.draw(b, 0, 0, 0, SC, SC)
+        end
+    end
+end
+
+end -- (objetos visibles)
+
 -- Viñeta en coordenadas de pantalla (superior 400x240). Sin gradientes: cuatro
 -- bandas finas semitransparentes en los bordes.
 function W.drawVignette(w, h)
@@ -1722,21 +2112,21 @@ function W.drawVignette(w, h)
     lg.setColor(1, 1, 1, 1)
 end
 
+-- Tope de tiempo por fotograma para adelantar chunks (segundos).
+local PREFETCH_BUDGET = 0.003
 function W.update(dt, cam)
     cam = cam or G.Camera
-    local pad = 60
-    local l, t = cam.left(), cam.top()
-    local x0, x1 = floor((l - pad) / CW), floor((l + cam.w + pad) / CW)
-    local y0, y1 = floor((t - pad) / CW), floor((t + cam.h + pad) / CW)
-    for cy = y0, y1 do
-        for cx = x0, x1 do
-            local props = chunkData(cx, cy).props
-            for i = 1, #props do
-                local p = props[i]
-                if p.flash > 0 then p.flash = p.flash - dt end
-            end
+    -- Destello de los objetos golpeados: sólo los de la lista (antes se recorrían
+    -- todos los objetos a la vista cada fotograma).
+    for i = #flashing, 1, -1 do
+        local p = flashing[i]
+        p.flash = p.flash - dt
+        if p.flash <= 0 then
+            p.flash = 0
+            flashing[i] = flashing[#flashing]; flashing[#flashing] = nil
         end
     end
+    prefetch(cam.x, cam.y, PREFETCH_BUDGET)
 end
 
 -- ---------------- control ----------------
@@ -1749,6 +2139,10 @@ function W.reset(s)
     for k in pairs(broken) do broken[k] = nil end
     arena = nil
     clearPieceCache()
+    nmx, nmy, nma, nmb, nmc, nmd = {}, {}, {}, {}, {}, {}   -- (una entrada por semilla)
+    pend, prefetchDone = nil, false
+    propsVer = propsVer + 1
+    clearList(flashing)
     invalidateBatches()
 end
 
@@ -1759,6 +2153,7 @@ function W.setBiome(i, instant)
     if i >= ARENA then b = i else b = ((i % NORMAL) + NORMAL) % NORMAL end
     if b == biome then return end
     biome = b
+    propsVer = propsVer + 1                      -- (cambian las cajas de los árboles y qué es plano)
     -- El terreno es el mismo: sólo cambia el tileset (y con él los batches).
     releaseTileset()
 end
@@ -1771,6 +2166,8 @@ function W.setArena(a)
     arena = a
     invalidateBatches()
     clearPieceCache()
+    pend, prefetchDone = nil, false              -- (el terreno de la zona cambia)
+    propsVer = propsVer + 1
     if not a then return end
     a.th = ARENA_THEMES[a.type] or ARENA_THEMES.normal
     -- Olvida los chunks de esa zona (si se hubieran generado antes).

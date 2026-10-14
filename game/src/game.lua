@@ -494,16 +494,18 @@ end
 
 -- ---------------- dibujo (pantalla superior) ----------------
 
-local items = {}      -- lista reutilizada para ordenar por Y
+local ents = {}       -- entidades a la vista (lista reutilizada), ordenadas por Y
 local function byY(a, b) return a.y < b.y end
 local reflOpts = { reflect = true }
 
 local function drawScene(cam, extra)
+    local World = G.World
     local t = U.now()
-    G.World.drawGround(cam)
-    G.World.drawLiquid(cam, t)
-    local props = G.World.visibleProps(cam)
-    G.World.drawGrassBase(props)          -- capa trasera de la hierba alta
+    World.drawGround(cam)
+    World.drawLiquid(cam, t)
+    -- Objetos a la vista: los planos y los que se ordenan (éstos ya vienen
+    -- ordenados por Y, ver World.visibleSplit).
+    local flat, props = World.visibleSplit(cam)
     G.Hazards.draw()
     G.Combat.drawGroundFields()
     G.Pickups.draw()
@@ -511,71 +513,42 @@ local function drawScene(cam, extra)
     -- Lo plano, las flores y las matitas de hierba van pegados al suelo: siempre por
     -- debajo de quien los pisa, así que se dibujan ya y no entran en la ordenación
     -- (son la mayoría de los objetos a la vista).
-    -- Todo lo que tiene "pies" se ordena por Y: objetos, enemigos, jugador.
+    World.drawFlat(flat, t)
+
+    -- Todo lo que tiene "pies" se ordena por Y: objetos, enemigos, jugador. Sólo
+    -- se ordenan las entidades; luego se mezclan con los objetos (ya ordenados).
     local n = 0
-    for i = 1, #props do
-        local p = props[i]
-        local ty = p.type
-        if p.flat or ty == 'flower' or ty == 'tuft' then
-            G.World.drawProp(p, t)
-        else
-            n = n + 1
-            local it = items[n] or {}
-            it.y = G.World.propSortY(p); it.prop = p; it.ent = nil
-            items[n] = it
-        end
-    end
     local ds = G.EnemyMgr.drawables(cam)
-    for i = 1, #ds do
-        n = n + 1
-        local it = items[n] or {}
-        it.y = ds[i].y; it.ent = ds[i]; it.prop = nil
-        items[n] = it
-    end
-    for i = 1, #extra do
-        n = n + 1
-        local it = items[n] or {}
-        it.y = extra[i].y; it.ent = extra[i]; it.prop = nil
-        items[n] = it
-    end
+    for i = 1, #ds do n = n + 1; ents[n] = ds[i] end
+    for i = 1, #extra do n = n + 1; ents[n] = extra[i] end
     local rift = G.Rift.drawable()
-    if rift then
-        n = n + 1
-        local it = items[n] or {}
-        it.y = rift.y; it.ent = rift; it.prop = nil
-        items[n] = it
-    end
+    if rift then n = n + 1; ents[n] = rift end
     local arceus = (pl and state ~= "ui") and G.Judgment.drawable() or nil
-    if arceus then
-        n = n + 1
-        local it = items[n] or {}
-        it.y = arceus.y; it.ent = arceus; it.prop = nil
-        items[n] = it
-    end
+    if arceus then n = n + 1; ents[n] = arceus end
     if pl and state ~= "ui" then
         local evs = G.Events.drawables()
-        for i = 1, #evs do
-            n = n + 1
-            local it = items[n] or {}
-            it.y = evs[i].y; it.ent = evs[i]; it.prop = nil
-            items[n] = it
-        end
+        for i = 1, #evs do n = n + 1; ents[n] = evs[i] end
     end
-    for i = #items, n + 1, -1 do items[i] = nil end
-    table.sort(items, byY)
+    for i = #ents, n + 1, -1 do ents[i] = nil end
+    if n > 1 then table.sort(ents, byY) end
     -- Reflejos en el agua (debajo de todo): quien pisa agua con agua también debajo.
-    if G.World.reflects() then
+    if World.reflects() then
         for i = 1, n do
-            local e = items[i].ent
-            if e and e.anim and not e.flying and not e.dead
-               and G.World.isLiquid(e.x, e.y) and G.World.isLiquid(e.x, e.y + 24) then
+            local e = ents[i]
+            if e.anim and not e.flying and not e.dead
+               and World.isLiquid(e.x, e.y) and World.isLiquid(e.x, e.y + 24) then
                 e.anim:draw(e.x, e.y, reflOpts)
             end
         end
     end
-    for i = 1, n do
-        local it = items[i]
-        if it.prop then G.World.drawProp(it.prop, t) else it.ent:draw() end
+    local np = #props
+    local i, j = 1, 1
+    while i <= np or j <= n do
+        if j > n or (i <= np and props[i]._sy < ents[j].y) then
+            World.drawProp(props[i], t); i = i + 1
+        else
+            ents[j]:draw(); j = j + 1
+        end
     end
 end
 
@@ -632,18 +605,29 @@ local function spawnWanderer(dex, anywhere)
     return w
 end
 
+-- Los paseantes aparecen de uno en uno (uno por fotograma, ver Backdrop.step): en
+-- la consola cada hoja de sprites tarda ~40 ms en cargarse y cargar las 20 de golpe
+-- era casi un segundo parado al arrancar y al volver de una partida.
+local castN = 0                 -- paseantes ya creados
+local oneDex = {}               -- (lista reutilizada para Sprites.preload)
+
 function Backdrop.init()
     G.World.reset(4242)
     G.World.setBiome(0, true)
     G.Camera.x = 0; G.Camera.y = 0
     wanderers = {}
-    G.Sprites.preload(CAST, false)
-    for i, dex in ipairs(CAST) do wanderers[i] = spawnWanderer(dex, true) end
+    castN = 0
     ready = true
 end
 
 function Backdrop.step(dt)
     if not ready then return end
+    if castN < #CAST then
+        castN = castN + 1
+        oneDex[1] = CAST[castN]
+        G.Sprites.preload(oneDex, false)
+        wanderers[castN] = spawnWanderer(CAST[castN], true)
+    end
     bt = bt + dt
     G.World.update(dt, G.Camera)
     -- Deriva lenta de la cámara.
@@ -697,9 +681,8 @@ function Backdrop.restore()
     G.World.setBiome(bi, true)
     G.FX.clear(); G.Projectiles.clear(); G.Combat.clearFields(); G.EnemyMgr.clear(); G.Pickups.clear()
     G.Sprites.gc({})
-    G.Sprites.preload(CAST, false)
     wanderers = {}
-    for i, dex in ipairs(CAST) do wanderers[i] = spawnWanderer(dex, true) end
+    castN = 0                   -- (vuelven a aparecer poco a poco, ver Backdrop.step)
 end
 
 function Game.toUI()
