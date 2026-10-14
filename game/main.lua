@@ -64,10 +64,12 @@ G_IS_CONSOLE = IS_CONSOLE
 -- DIAGNÓSTICO de cierres sin error de Lua (versión de prueba): durante la partida,
 -- G_MARK(x) escribe en sdmc:/pokesurvivor-marcas.txt por qué parte del fotograma va
 -- (con flush: lo último del fichero es dónde se cerró). Cuesta rendimiento.
-G_DIAG = IS_CONSOLE
+-- (Apagado: cuesta ~13 ms por fotograma. Se enciende con «diag» en el fichero de
+-- opciones de abajo.)
 -- Opciones de prueba en sdmc:/pokesurvivor-flags.txt (palabras sueltas), para
 -- activar o desactivar cosas sin recompilar: notb, noflat, noell, nosfx,
--- noprefetch, flush3 (marcas a la SD también tras la lógica y tras la pantalla de arriba).
+-- noprefetch, diag (marcas por fotograma en la SD), flush3 (además tras la lógica y
+-- tras la pantalla de arriba).
 G_FLAGS = {}
 for _, a in ipairs(arg or {}) do                 -- en el PC: --flags=noflat,noell...
     local l = a:match("^%-%-flags=(.+)$")
@@ -80,6 +82,7 @@ if IS_CONSOLE then
         f:close()
     end
 end
+G_DIAG = IS_CONSOLE and G_FLAGS.diag
 local markF, markFrames = nil, 0
 if G_DIAG then
     function G_MARK(s)
