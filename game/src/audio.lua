@@ -84,6 +84,7 @@ local xpCombo, xpT = 0, -1
 local function getPool(file)
     local p = pools[file]
     if p ~= nil then return p end
+    if G_MARKF then G_MARKF("SFX:" .. tostring(file)) end
     local ok, src = pcall(love.audio.newSource, "sfx/" .. file .. ".wav", "static")
     if not ok or not src then
         pools[file] = false
@@ -128,6 +129,7 @@ end
 -- Efecto: sfx("hit"), sfx("shot", {kind="beam", type="fire"}), sfx("burst", {rarity=3}) ...
 function A.sfx(name, opts)
     if not hasAudio or not name or settings.muted or settings.sfx <= 0 then return end
+    if G_FLAGS and G_FLAGS.nosfx then return end
     local key = name
     if name == "shot" and opts then key = shotKey(opts.kind) end
     local now = love.timer.getTime()
@@ -207,6 +209,7 @@ local function loadMusic(name)
 end
 
 local function startMusic(name)
+    if G_MARKF then G_MARKF("MUS:" .. tostring(name)) end
     local src = musicSrc[name]
     if src == nil then
         src = loadMusic(name)

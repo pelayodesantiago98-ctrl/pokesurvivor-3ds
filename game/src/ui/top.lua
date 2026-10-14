@@ -1,5 +1,5 @@
 -- top.lua — superposiciones de la PANTALLA SUPERIOR (400x240), en coordenadas de
--- pantalla, encima del mundo: barra de XP, vida, reloj, jefe, avisos, flechas a
+-- pantalla, encima del mundo: vida, reloj, jefe, avisos, flechas a
 -- shinies y a la grieta. Fuera de la run, `TopUI.overlay` (función) la pone la
 -- interfaz (ficha de la Pokédex, resultado del gacha...).
 local U = G.U
@@ -52,13 +52,7 @@ local function drawRun(pl)
     local st = G.Game.state()
     -- La Sentencia de Arceus: durante la animación sólo se ve ella.
     if G.Judgment.cinematic() then G.Judgment.drawHud(W, H, pl, nil) lg.setColor(1, 1, 1, 1) return end
-    -- Barra de experiencia (borde superior)
-    local xpF = pl.xp / pl.xpNext
-    lg.setColor(0, 0, 0, 0.5)
-    lg.rectangle("fill", 0, 0, W, 4)
-    U.setColor("#4fd1ff")
-    lg.rectangle("fill", 0, 0, W * U.clamp(xpF, 0, 1), 4)
-
+    -- (Sin barra de experiencia arriba: ya está la de la caja de estado de abajo.)
     -- Solo el reloj arriba: nombre, nivel, vida, derrotados y monedas van en la
     -- pantalla de abajo; el nombre de la zona sale en su cartel al entrar.
     lg.setFont(font(16))

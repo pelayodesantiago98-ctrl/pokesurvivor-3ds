@@ -62,6 +62,7 @@ local failed = {}                            -- key -> hora del último fallo (n
 local getTime = love.timer.getTime
 
 local function release(key, sh)
+    if G_MARKF then G_MARKF("REL:" .. key) end
     sh.dead = true                           -- (los animadores que la guardan la vuelven a pedir)
     if sh.img.release then pcall(sh.img.release, sh.img) end
     sheets[key] = nil
@@ -95,7 +96,9 @@ local function loadSheet(dex, full, shiny)
     if failed[key] and getTime() - failed[key] < 3 then return nil end
     if nSheets >= MAX_SHEETS then evict(MAX_SHEETS - 8, 0.5) end
     if G_PRINT_STEPS and G_STEP then G_STEP("hoja de sprites " .. tostring(set.atlas)) end
+    if G_MARKF then G_MARKF("LOAD:" .. key) end
     local ok, img = pcall(lg.newImage, U.img(set.atlas))
+    if G_MARKF then G_MARKF("ok") end
     if not ok or not img then
         -- Sin memoria: suelta todo lo que no se esté dibujando y prueba otra vez.
         evict(0, 0.5)
@@ -277,7 +280,7 @@ local ELL_W, ELL_H = 128, 64
 function S.ellipse(x, y, rx, ry)
     if rx <= 0 or ry <= 0 then return end
     local img = ellImg or ellipseImg()
-    if img then
+    if img and not (G_FLAGS and G_FLAGS.noell) then
         lg.draw(img, x - rx, y - ry, 0, rx * 2 / ELL_W, ry * 2 / ELL_H)
     else
         lg.ellipse("fill", x, y, rx, ry)

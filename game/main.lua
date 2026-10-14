@@ -60,6 +60,51 @@ G_TRACE = trace
 local IS_CONSOLE = love._potion_version ~= nil
     or (love.system and love.system.getOS and love.system.getOS() == "Horizon")
 G_IS_CONSOLE = IS_CONSOLE
+
+-- DIAGNÓSTICO de cierres sin error de Lua (versión de prueba): durante la partida,
+-- G_MARK(x) escribe en sdmc:/pokesurvivor-marcas.txt por qué parte del fotograma va
+-- (con flush: lo último del fichero es dónde se cerró). Cuesta rendimiento.
+G_DIAG = IS_CONSOLE
+-- Opciones de prueba en sdmc:/pokesurvivor-flags.txt (palabras sueltas), para
+-- activar o desactivar cosas sin recompilar: notb, noflat, noell, nosfx,
+-- noprefetch, flush3 (marcas a la SD también tras la lógica y tras la pantalla de arriba).
+G_FLAGS = {}
+for _, a in ipairs(arg or {}) do                 -- en el PC: --flags=noflat,noell...
+    local l = a:match("^%-%-flags=(.+)$")
+    if l then for w in l:gmatch("[%w_]+") do G_FLAGS[w] = true end end
+end
+if IS_CONSOLE then
+    local f = io.open("sdmc:/pokesurvivor-flags.txt", "r")
+    if f then
+        for w in (f:read("*a") or ""):gmatch("[%w_]+") do G_FLAGS[w] = true end
+        f:close()
+    end
+end
+local markF, markFrames = nil, 0
+if G_DIAG then
+    function G_MARK(s)
+        if not markF then
+            markF = io.open("sdmc:/pokesurvivor-marcas.txt", "w")
+            if not markF then G_MARK = function() end return end
+        end
+        markF:write(s, " ")          -- (sin flush: se escribe al final del fotograma)
+    end
+    -- Cosas que pasan de vez en cuando (cargar o soltar texturas, generar mapa...):
+    -- se escriben ya, por si el cierre viene de ahí.
+    function G_MARKF(s)
+        if not G_MARKING then return end
+        G_MARK(s)
+        if markF then markF:flush() end
+    end
+    -- Fin de fotograma: salto de línea con datos; cada 600 fotogramas se empieza el
+    -- fichero de nuevo (para que no crezca).
+    function G_MARK_END(info)
+        if not markF then return end
+        markFrames = markFrames + 1
+        markF:write("| ", info or "", "\n")
+        if markFrames % 600 == 0 then markF:close(); markF = nil else markF:flush() end
+    end
+end
 local steps = {}
 -- En consola los pasos van a sdmc:/pokesurvivor-trace.txt, pero escribir en la SD
 -- cuesta ~20 ms: cada paso se guarda en memoria y se escribe todo junto (abrir,
@@ -298,6 +343,12 @@ function love.load()
     Input.load()
     trace("input.load")
     G.UI.load()
+    if G_FLAGS.notb then G.UI.TEXT_BATCH = false end
+    do
+        local fl = {}
+        for k in pairs(G_FLAGS) do fl[#fl + 1] = k end
+        if #fl > 0 and G_STEP then G_STEP("opciones de prueba: " .. table.concat(fl, " "), true) end
+    end
     trace("ui.load")
     G.Icons.load()
     trace("icons.load")
@@ -317,6 +368,36 @@ function love.load()
         G_BAKING = false
         return
     end
+    -- `--bakehud`: hornea el fondo del HUD (img/ui/hudbg.png) y los marcos de los
+    -- botones de movimiento por tipo (img/ui/movebtn.png) en la carpeta de guardado;
+    -- luego se copian a game/img/ui/. En la consola no se puede pintar en una imagen
+    -- durante la partida (Canvas falla): así se dibujan de una vez.
+    if G_BAKE_HUD then
+        G_BAKING = true
+        local lg, R = love.graphics, G.RunUI
+        love.filesystem.createDirectory("img/ui")
+        local cv = lg.newCanvas(G.UI.W, G.UI.H)
+        lg.setCanvas(cv); lg.clear(0, 0, 0, 0)
+        R.bakeHudBg()
+        lg.setCanvas()
+        cv:newImageData():encode("png", "img/ui/hudbg.png")
+        local rows = math.ceil(#R.BTN_TYPES / R.BTN_COLS)
+        local bw, bh = 1, 1
+        while bw < R.BTN_COLS * R.BTN_CW do bw = bw * 2 end
+        while bh < rows * R.BTN_CH do bh = bh * 2 end
+        local cb = lg.newCanvas(bw, bh)
+        lg.setCanvas(cb); lg.clear(0, 0, 0, 0)
+        for i, t in ipairs(R.BTN_TYPES) do
+            local c, r = (i - 1) % R.BTN_COLS, math.floor((i - 1) / R.BTN_COLS)
+            R.buttonFrame(c * R.BTN_CW, r * R.BTN_CH, R.MV_W, R.MV_H, t ~= "" and t or nil)
+        end
+        lg.setCanvas()
+        cb:newImageData():encode("png", "img/ui/movebtn.png")
+        print("BAKE_OK " .. love.filesystem.getSaveDirectory() .. "/img/ui (hudbg.png, movebtn.png " .. bw .. "x" .. bh .. ")")
+        love.event.quit()
+        G_BAKING = false
+        return
+    end
     if G.Audio.preload then pcall(G.Audio.preload) end
     trace("audio")
     -- `love game --run`: empieza una partida directamente (capturas y depuración).
@@ -328,6 +409,10 @@ function love.load()
         if startLevel and not soakSeconds then G.Game.debugSetLevel(startLevel) end
         if startTime and not soakSeconds then G.Game.debugTime(startTime) end
         if a == "--levelup" then G.Game.debugLevelUp() end
+        -- `--arena`: entra ya en una grieta; `--arenaback=N`: sale de ella a los N s.
+        if a == "--arena" then G.Rift.debugArena() end
+        local ab = a:match("^%-%-arenaback=(%d+)$")
+        if ab then G_ARENA_BACK = tonumber(ab) end
         if a == "--die" then G.Game.debugDie() end
         if a == "--killbosses" then G.Game.autoKillBosses = true end
         -- `--liqtest`: ¿quién puede pisar agua (bosque) y lava (volcán)?
@@ -650,9 +735,17 @@ function love.update(dt)
     -- segundo y así no retrasa la pantalla de título, que es lo primero que se ve.
     if not firstDrawDone then Input.endFrame() return end
     dt = math.min(1 / 30, dt)
+    if G_ARENA_BACK then
+        G_ARENA_BACK = G_ARENA_BACK - dt
+        if G_ARENA_BACK <= 0 then G_ARENA_BACK = nil; G.Rift.leave() end
+    end
     local tu = love.timer.getTime()
+    G_MARKING = G_MARK and G.Game.state() ~= "ui"      -- (diagnóstico: sólo en partida)
+    if G_MARKING then G_MARK("U") end
     G.Game.frame(dt)
+    if G_MARKING then G_MARK("ui") end
     G.UI.update(dt)
+    if G_MARKING and G_FLAGS.flush3 then G_MARKF("/U") end
     PERF.upd = PERF.upd + love.timer.getTime() - tu
     Input.endFrame()
 end
@@ -671,10 +764,18 @@ function love.draw(screen)
     local td = love.timer.getTime()
     local t0 = G_PROF and G_PROF.on and love.timer.getTime()
     if isTop(screen) then
+        if G_MARKING then G_MARK("T") end
         G.Game.render()
+        if G_MARKING then G_MARK("topui") end
         G.TopUI.draw()
+        if G_MARKING and G_FLAGS.flush3 then G_MARKF("/T") end
     else
+        if G_MARKING then G_MARK("B:" .. tostring(G.UI.current())) end
         G.UI.draw()
+        if G_MARKING then
+            G_MARK_END(string.format("%.1f e%d h%d v%d", love.timer.getTime(), G.EnemyMgr.count(),
+                G.Sprites.loadedCount(), G_VERTS or 0))
+        end
     end
     if isTop(screen) then PERF.top = PERF.top + love.timer.getTime() - td
     else PERF.bot = PERF.bot + love.timer.getTime() - td end
@@ -858,6 +959,7 @@ for _, a in ipairs(arg or {}) do
         -- carpeta de guardado; luego se copia a game/img/ui/.
         G_BAKE_BG = true
     end
+    if a == "--bakehud" then G_BAKE_HUD = true end
     if a == "--countdraw" then
         G_COUNTDRAW = {}
         for _, fn in ipairs({ "draw", "print", "printf", "circle", "polygon", "line" }) do

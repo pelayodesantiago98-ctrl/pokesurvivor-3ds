@@ -15,6 +15,17 @@ function Input.load()
     down, pressed = {}, {}
 end
 
+-- El mando de la consola (o nil si no hay forma de consultarlo).
+local padObj, padTried = nil, false
+function Input.pad()
+    if padTried then return padObj end
+    padTried = true
+    local ok, list = pcall(function() return love.joystick and love.joystick.getJoysticks() end)
+    local j = ok and list and list[1]
+    if j and j.isGamepadDown and pcall(j.isGamepadDown, j, "dpright") then padObj = j end
+    return padObj
+end
+
 function Input.gamepadPressed(button)
     down[button] = true
     pressed[button] = true
@@ -33,7 +44,14 @@ function Input.gamepadAxis(axis, value)
     axes[axis] = value
 end
 
-function Input.isDown(button) return down[button] == true end
+function Input.isDown(button)
+    local pad = U.CONSOLE and Input.pad()
+    if pad then
+        local ok, d = pcall(pad.isGamepadDown, pad, button)
+        if ok then return d == true end
+    end
+    return down[button] == true
+end
 Input.held = Input.isDown
 function Input.pressed(button) return pressed[button] == true end
 Input.tap = Input.pressed
@@ -72,13 +90,23 @@ function Input.axis()
         return x, y
     end
     local x, y = axes.leftx or 0, axes.lefty or 0
-    if math.abs(x) < 0.2 then x = 0 end
-    if math.abs(y) < 0.2 then y = 0 end
+    if math.abs(x) < 0.25 then x = 0 end
+    if math.abs(y) < 0.25 then y = 0 end
 
-    if down.dpleft  then x = -1 end
-    if down.dpright then x =  1 end
-    if down.dpup    then y = -1 end
-    if down.dpdown  then y =  1 end
+    -- En la consola la cruceta se mira en el propio mando cada fotograma: si se
+    -- perdía el aviso de soltarla, el Pokémon seguía andando solo hacia ese lado.
+    local pad = U.CONSOLE and Input.pad()
+    if pad then
+        if pad:isGamepadDown("dpleft")  then x = -1 end
+        if pad:isGamepadDown("dpright") then x =  1 end
+        if pad:isGamepadDown("dpup")    then y = -1 end
+        if pad:isGamepadDown("dpdown")  then y =  1 end
+    else
+        if down.dpleft  then x = -1 end
+        if down.dpright then x =  1 end
+        if down.dpup    then y = -1 end
+        if down.dpdown  then y =  1 end
+    end
 
     -- Respaldo de teclado para PC sin nest (WASD / flechas).
     if love.keyboard and not U.CONSOLE then

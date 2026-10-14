@@ -21,6 +21,8 @@ local flashT, flashDur, flashCol = 0, 1, "#ffffff"
 local frameDt = 0
 -- Tickets de esta partida que ya están en la partida guardada (ver bankTickets).
 local banked1, banked10 = 0, 0
+-- Diagnóstico de cierres en la consola (ver G_MARK en main.lua).
+local function M(s) if G_MARKING then G_MARK(s) end end
 local ticketsDirty, ticketSaveT = false, 60     -- tickets apuntados pero aún no escritos en la SD
 
 G.BIOME_MUSIC = { "forest", "cave", "volcano" }
@@ -428,28 +430,29 @@ local function update(dt)
         G.FX.ring(pl.x, pl.y, 10, G.Camera.outerRadius(), "#ffffff", 0.7, 6)
     end
 
-    pl:update(dt)
-    G.Evolution.update(pl)
-    G.World.rustle(pl.x, pl.y, dt)
+    M("pl"); pl:update(dt)
+    M("evo"); G.Evolution.update(pl)
+    M("rus"); G.World.rustle(pl.x, pl.y, dt)
     G.Camera.follow(pl.x, pl.y, dt)
-    G.World.update(dt, G.Camera)
+    M("wu"); G.World.update(dt, G.Camera)
 
-    G.Path.update(dt, pl)
-    G.Spawner.update(dt, pl, time)
-    G.EnemyMgr.update(dt, pl)
-    G.EnemyMgr.rebuildGrid()
-    G.Combat.tick(dt, pl, time)
-    G.Projectiles.update(dt, pl, G.EnemyMgr.all())
-    G.Combat.resolve(dt, pl, time)
-    G.Combat.updateFields(dt)
-    G.Pickups.update(dt, pl, onCollect)
-    G.Hazards.update(dt)
-    G.Interact.update(dt, pl)
-    G.Rift.update(dt, pl, time)
-    G.Judgment.update(dt, pl, time)
-    G.Events.update(dt, pl, time)
-    G.Weather.update(dt, time, pl)
-    G.FX.update(dt)
+    M("path"); G.Path.update(dt, pl)
+    M("spawn"); G.Spawner.update(dt, pl, time)
+    M("enem"); G.EnemyMgr.update(dt, pl)
+    M("grid"); G.EnemyMgr.rebuildGrid()
+    M("ctick"); G.Combat.tick(dt, pl, time)
+    M("proj"); G.Projectiles.update(dt, pl, G.EnemyMgr.all())
+    M("cres"); G.Combat.resolve(dt, pl, time)
+    M("cfld"); G.Combat.updateFields(dt)
+    M("pick"); G.Pickups.update(dt, pl, onCollect)
+    M("haz"); G.Hazards.update(dt)
+    M("int"); G.Interact.update(dt, pl)
+    M("rift"); G.Rift.update(dt, pl, time)
+    M("judg"); G.Judgment.update(dt, pl, time)
+    M("evt"); G.Events.update(dt, pl, time)
+    M("wea"); G.Weather.update(dt, time, pl)
+    M("fx"); G.FX.update(dt)
+    M("mus")
 
     if G.Judgment.active() then G.Audio.music(G.Judgment.music())
     else G.Audio.music(G.Rift.inArena() and "rift" or (G.EnemyMgr.bossAlive() and "boss" or G.BIOME_MUSIC[(biome % #G.BIOME_MUSIC) + 1])) end
@@ -461,7 +464,8 @@ local function update(dt)
             if e.boss and not e.dead then e:hurt(1e9, "#ffffff") end
         end
     end
-    G.Stages.update(dt)
+    M("stg"); G.Stages.update(dt)
+    M("lvl")
     if G.Stages.cleared() and state == "playing" and not pl.dead then
         Game.endRun(false, true)
         return
@@ -483,7 +487,7 @@ function Game.frame(dt)
             G.DB.commit()
         end
     end
-    if state == "playing" then G.Sprites.step() end
+    if state == "playing" then M("step"); G.Sprites.step() end
     if state == "playing" then update(dt)
     elseif pl and state ~= "ui" then
         G.FX.update(dt * 0.25)
@@ -502,14 +506,15 @@ local reflOpts = { reflect = true }
 local function drawScene(cam, extra)
     local World = G.World
     local t = U.now()
-    World.drawGround(cam)
-    World.drawLiquid(cam, t)
+    M("dgr"); World.drawGround(cam)
+    M("dliq"); World.drawLiquid(cam, t)
     -- Objetos a la vista: los planos y los que se ordenan (éstos ya vienen
     -- ordenados por Y, ver World.visibleSplit).
-    local flat, props = World.visibleSplit(cam)
-    G.Hazards.draw()
-    G.Combat.drawGroundFields()
-    G.Pickups.draw()
+    M("vis"); local flat, props = World.visibleSplit(cam)
+    M("dhaz"); G.Hazards.draw()
+    M("dfld"); G.Combat.drawGroundFields()
+    M("dpick"); G.Pickups.draw()
+    M("dflat")
 
     -- Lo plano, las flores y las matitas de hierba van pegados al suelo: siempre por
     -- debajo de quien los pisa, así que se dibujan ya y no entran en la ordenación
@@ -542,6 +547,7 @@ local function drawScene(cam, extra)
             end
         end
     end
+    M("dents")
     local np = #props
     local i, j = 1, 1
     while i <= np or j <= n do
@@ -559,13 +565,13 @@ function Game.render()
         G.Camera.apply()
         extraOne[1] = pl
         drawScene(G.Camera, extraOne)
-        G.Projectiles.draw()
-        G.Combat.drawAirFields()
-        G.FX.draw()
-        G.Judgment.drawAir()
+        M("dproj"); G.Projectiles.draw()
+        M("dair"); G.Combat.drawAirFields()
+        M("dfx"); G.FX.draw()
+        M("djud"); G.Judgment.drawAir()
         G.Camera.unapply()
-        G.Weather.draw(400, 240, frameDt)
-        G.World.drawVignette(400, 240)
+        M("dwea"); G.Weather.draw(400, 240, frameDt)
+        M("dvig"); G.World.drawVignette(400, 240)
         if flashT > 0 then
             U.setColor(flashCol, math.min(1, flashT / flashDur * 1.4))
             love.graphics.rectangle("fill", 0, 0, 400, 240)

@@ -53,7 +53,9 @@ end
 -- Caja de estado como la de los combates de los juegos: nombre y nivel, etiqueta
 -- HP con barra que pasa de verde a amarillo y rojo, cifras a la derecha y la barra
 -- azul de experiencia debajo.
-local function battleBox(pl, x, y, w, live)
+-- Parte fija de la caja (la caja, la etiqueta HP, las pistas de las barras y la
+-- etiqueta EXP): en la consola va ya pintada en img/ui/hudbg (main.lua --bakehud).
+local function battleBoxFrame(x, y, w)
     local h = 56
     -- Caja gris de Platino: sombra, relleno, brillo superior y contorno oscuro
     U.setColor("#202020")
@@ -68,38 +70,19 @@ local function battleBox(pl, x, y, w, live)
     lg.setLineWidth(2)
     lg.rectangle("line", x + 1, y + 1, w - 2, h - 2, 6, 6)
     lg.setLineWidth(1)
-    -- Nombre y nivel en la fuente pixelada con la sombra clara de Platino
     local PF = G.PixelFont
-    local dark = BOX_DARK
-    PF.print(pl.mon.name, x + 10, y + 7, dark)
-    local lv = LV_TXT[pl.level]
-    if not lv then lv = "LV" .. pl.level; LV_TXT[pl.level] = lv end
-    local lvw = PF.width(lv, 2)
-    PF.print(lv, x + w - 12 - lvw, y + 7, dark)
-    if pl.shiny then PF.print("*", x + w - 24 - lvw, y + 7, BOX_SHINY) end
     -- Etiqueta HP: texto siempre verde sobre fondo oscuro (la que cambia de color
     -- según la vida es la barra, no la etiqueta).
     local bx, by, bw, bh = x + 54, y + 25, w - 66, 7
     U.setColor("#383838")
     lg.rectangle("fill", bx - 25, by - 3, 23, 13, 4, 4)
     PF.print("HP", bx - 25 + (23 - PF.width("HP", 1)) / 2, by, BOX_HP)
-    -- Barra de vida: borde oscuro, pista blanca y relleno por tramos
-    local frac = U.clamp(pl.hp / pl.maxHp, 0, 1)
+    -- Pista de la barra de vida: borde oscuro y fondo blanco
     U.setColor("#303030")
     lg.rectangle("fill", bx - 2, by - 2, bw + 4, bh + 4, 3, 3)
     U.setColor("#ffffff")
     lg.rectangle("fill", bx, by, bw, bh)
-    local col = frac > 0.5 and "#58d080" or (frac > 0.2 and "#f8d848" or "#f85038")
-    if frac > 0 then
-        U.setColor(col)
-        lg.rectangle("fill", bx, by, math.max(2, bw * frac), bh)
-        U.setColor("#ffffff", 0.45)
-        lg.rectangle("fill", bx, by, math.max(2, bw * frac), 2)
-    end
-    -- Cifras (dentro de la caja, bajo la barra)
-    local txt = math.ceil(pl.hp) .. "/" .. U.round(pl.maxHp)
-    PF.print(txt, bx + bw - PF.width(txt, 2), by + 11, dark)
-    -- Barra de experiencia bajo la caja: etiqueta EXP sobre azul marino y barra azul
+    -- Barra de experiencia bajo la caja: etiqueta EXP sobre azul marino y pista
     local ex, ey, ew, eh = x + 40, y + h + 4, w - 48, 4
     U.setColor("#283048")
     lg.rectangle("fill", x + 6, ey - 4, 30, 12, 3, 3)
@@ -110,7 +93,37 @@ local function battleBox(pl, x, y, w, live)
     lg.rectangle("fill", ex - 2, ey - 2, ew + 4, eh + 4, 2, 2)
     U.setColor("#485060")
     lg.rectangle("fill", ex, ey, ew, eh)
-    -- El relleno cambia con cada gema: en la imagen guardada no va (lo pone hud.draw).
+    lg.setColor(1, 1, 1, 1)
+end
+R.battleBoxFrame = battleBoxFrame
+
+-- @param framed  true si la parte fija ya está pintada (imagen del fondo del HUD)
+local function battleBox(pl, x, y, w, live, framed)
+    local h = 56
+    if not framed then battleBoxFrame(x, y, w) end
+    -- Nombre y nivel en la fuente pixelada con la sombra clara de Platino
+    local PF = G.PixelFont
+    local dark = BOX_DARK
+    PF.print(pl.mon.name, x + 10, y + 7, dark)
+    local lv = LV_TXT[pl.level]
+    if not lv then lv = "LV" .. pl.level; LV_TXT[pl.level] = lv end
+    local lvw = PF.width(lv, 2)
+    PF.print(lv, x + w - 12 - lvw, y + 7, dark)
+    if pl.shiny then PF.print("*", x + w - 24 - lvw, y + 7, BOX_SHINY) end
+    local bx, by, bw, bh = x + 54, y + 25, w - 66, 7
+    -- Relleno de la barra de vida, por tramos de color
+    local frac = U.clamp(pl.hp / pl.maxHp, 0, 1)
+    local col = frac > 0.5 and "#58d080" or (frac > 0.2 and "#f8d848" or "#f85038")
+    if frac > 0 then
+        U.setColor(col)
+        lg.rectangle("fill", bx, by, math.max(2, bw * frac), bh)
+        U.setColor("#ffffff", 0.45)
+        lg.rectangle("fill", bx, by, math.max(2, bw * frac), 2)
+    end
+    -- Cifras (dentro de la caja, bajo la barra)
+    local txt = math.ceil(pl.hp) .. "/" .. U.round(pl.maxHp)
+    PF.print(txt, bx + bw - PF.width(txt, 2), by + 11, dark)
+    -- El relleno de la experiencia cambia con cada gema: en la imagen guardada no va (lo pone hud.draw).
     if live then R.xpFill(pl, x, y, w, h) end
     lg.setColor(1, 1, 1, 1)
     return y + h + 12
@@ -124,6 +137,7 @@ end
 
 -- Geometría de los botones de movimiento y de la fila inferior (dibujo y zonas táctiles).
 local MV_TOP, MV_W, MV_H = 86, 148, 58
+R.MV_W, R.MV_H = MV_W, MV_H
 local function slotXY(i)
     local col_i, row = (i - 1) % 2, math.floor((i - 1) / 2)
     return 8 + col_i * (MV_W + 8), MV_TOP + 6 + row * (MV_H + 4)
@@ -134,9 +148,34 @@ local BOX_X, BOX_Y, BOX_W, BOX_H = 8, 6, 304, 56     -- caja de estado (BOX_H: a
 -- HUD completo. `live` = false cuando se pinta en la imagen guardada: entonces no
 -- lleva lo que se mueve cada fotograma (marco del activo, velo de recarga, latido
 -- del Burst), que hud.draw pone encima.
-local function drawHud(pl, live)
+-- Fondo del HUD ya pintado (fondo de Platino + parte fija de la caja de estado):
+-- img/ui/hudbg, generado con main.lua --bakehud. Sin él, se dibuja pieza a pieza.
+local hudBgImg, hudBgTried = nil, false
+local function drawHudBg()
+    if not hudBgTried then
+        hudBgTried = true
+        if not G_BAKING then
+            local ok, im = pcall(lg.newImage, U.img("img/ui/hudbg"))
+            if ok and im then hudBgImg = im end
+        end
+    end
+    if hudBgImg then
+        lg.setColor(1, 1, 1, 1)
+        lg.draw(hudBgImg, 0, 0)
+        return true
+    end
     R.platinumBackground(0)
-    local y0 = battleBox(pl, BOX_X, BOX_Y, BOX_W, live)
+    return false
+end
+-- (para --bakehud: el fondo y la parte fija de la caja, tal cual van en la imagen)
+function R.bakeHudBg()
+    R.platinumBackground(0)
+    battleBoxFrame(BOX_X, BOX_Y, BOX_W)
+end
+
+local function drawHud(pl, live)
+    local framed = drawHudBg()
+    local y0 = battleBox(pl, BOX_X, BOX_Y, BOX_W, live, framed)
 
     -- Buffs y poder
     local bx = 170
@@ -481,8 +520,39 @@ end
 -- bisel claro arriba y lateral oscuro, cara crema con banda inferior amarilla,
 -- nombre centrado oscuro con sombra clara, etiqueta del tipo abajo a la izquierda.
 -- Sin PP: a la derecha, los puntos de nivel del movimiento.
-function R.moveButton(x, y, w, h, m, fused, active, cd)
-    local f = m and frameOf(m.type) or EMPTY_FRAME
+-- Marcos ya pintados (img/ui/movebtn, main.lua --bakehud): uno por tipo y el del
+-- hueco vacío, con la sombra, el marco, la cara y la etiqueta del tipo. En la
+-- consola un botón es así una imagen en vez de ~25 rectángulos y la etiqueta.
+-- Celdas de BTN_CW x BTN_CH en BTN_COLS columnas; R.BTN_TYPES da el orden.
+local BTN_CW, BTN_CH, BTN_COLS = 151, 62, 3
+R.BTN_CW, R.BTN_CH, R.BTN_COLS = BTN_CW, BTN_CH, BTN_COLS
+local BTN_TYPES = {}
+for t in pairs(U.TYPE_COLOR) do BTN_TYPES[#BTN_TYPES + 1] = t end
+table.sort(BTN_TYPES)
+BTN_TYPES[#BTN_TYPES + 1] = ""              -- (el último: hueco vacío)
+R.BTN_TYPES = BTN_TYPES
+local btnImg, btnTried, btnQuad = nil, false, {}
+local function bakedButton(t)
+    if not btnTried then
+        btnTried = true
+        if not G_BAKING then
+            local ok, im = pcall(lg.newImage, U.img("img/ui/movebtn"))
+            if ok and im then
+                btnImg = im
+                local iw, ih = im:getWidth(), im:getHeight()
+                for i, ty in ipairs(BTN_TYPES) do
+                    local c, r = (i - 1) % BTN_COLS, math.floor((i - 1) / BTN_COLS)
+                    btnQuad[ty] = lg.newQuad(c * BTN_CW, r * BTN_CH, BTN_CW, BTN_CH, iw, ih)
+                end
+            end
+        end
+    end
+    return btnImg, btnQuad[t]
+end
+
+-- Parte fija del botón (sólo depende del tipo; t = nil: hueco vacío).
+function R.buttonFrame(x, y, w, h, t)
+    local f = t and frameOf(t) or EMPTY_FRAME
     -- Sombra de la caja sobre el fondo
     lg.setColor(0, 0, 0, 0.35)
     lg.rectangle("fill", x + 1, y + 2, w, h, 3, 3)
@@ -509,7 +579,7 @@ function R.moveButton(x, y, w, h, m, fused, active, cd)
     -- Cara crema con su borde amarillo y la banda inferior más oscura
     local fx, fy, fw, fh = x + 10, ly + 1, w - 20, h - #lid - 7
     local c1, c2, c3, c4 = "#ded065", "#eae097", "#f0e8aa", "#dfd168"
-    if not m then c1, c2, c3, c4 = "#8c8a9c", "#a8a6b8", "#b4b2c4", "#9c9aac" end
+    if not t then c1, c2, c3, c4 = "#8c8a9c", "#a8a6b8", "#b4b2c4", "#9c9aac" end
     U.setColor(c1)
     lg.rectangle("fill", fx, fy, fw, fh)
     U.setColor(c2)
@@ -519,11 +589,36 @@ function R.moveButton(x, y, w, h, m, fused, active, cd)
     lg.rectangle("fill", fx + 1, fy + 2, fw - 2, fh - 3 - band)
     U.setColor(c4)
     lg.rectangle("fill", fx + 1, fy + fh - 1 - band, fw - 2, band)
-    if not m then
+    if not t then
         lg.setFont(UI.font(12))
         U.setColor("#5c5a6c")
         lg.printf("-", fx, fy + fh / 2 - 8, fw, "center")
+    else
+        -- Etiqueta del tipo (fuente pixelada: mayúsculas sin tilde, como en el juego)
+        local PF = G.PixelFont
+        local tn = U.TYPE_NAME[t] or t
+        local tw = PF.width(tn, 1) + 10
+        local bx, by = fx + 3, fy + fh - 13
+        U.setColor(f.badgeEdge)
+        lg.rectangle("fill", bx, by, tw, 13, 3, 3)
+        U.setColor(f.badge)
+        lg.rectangle("fill", bx + 1, by + 1, tw - 2, 11, 3, 3)
+        PF.print(tn, bx + 5, by + 3, f.badgeSt)
     end
+    lg.setColor(1, 1, 1, 1)
+end
+
+-- Botón de movimiento completo (marco, recarga, nombre, nivel y marco de selección).
+function R.moveButton(x, y, w, h, m, fused, active, cd)
+    local t = m and m.type or nil
+    local img, q = bakedButton(t or "")
+    if img and q and w == MV_W and h == MV_H then
+        lg.setColor(1, 1, 1, 1)
+        lg.draw(img, q, x, y)
+    else
+        R.buttonFrame(x, y, w, h, t)
+    end
+    local fx, fy, fw, fh = x + 10, y + 8, w - 20, h - 14     -- cara (bajo las 7 filas de la tapa)
     if m then
         -- Recarga: velo oscuro de abajo arriba sobre la cara
         if cd and cd > 0.05 then
@@ -549,16 +644,8 @@ function R.moveButton(x, y, w, h, m, fused, active, cd)
             PF.print(L[1], fx + L[2], fy + 3, NAME_ST)
             PF.print(L[3], fx + L[4], fy + 16, NAME_ST)
         end
-        -- Etiqueta del tipo (fuente pixelada: mayúsculas sin tilde, como en el juego)
-        local tn = U.TYPE_NAME[m.type] or m.type
-        local tw = PF.width(tn, 1) + 10
-        local bx, by = fx + 3, fy + fh - 13
-        U.setColor(f.badgeEdge)
-        lg.rectangle("fill", bx, by, tw, 13, 3, 3)
-        U.setColor(f.badge)
-        lg.rectangle("fill", bx + 1, by + 1, tw - 2, 11, 3, 3)
-        PF.print(tn, bx + 5, by + 3, f.badgeSt)
         -- Nivel del movimiento en vez de PP
+        local by = fy + fh - 13
         local dots = m.def.maxLvl
         for d = 1, dots do
             local px = fx + fw - 6 - (dots - d + 1) * 8

@@ -569,8 +569,10 @@ end
 
 -- Mete un chunk terminado en `data` (desalojando el más viejo si hace falta).
 local function commitChunk(c)
+    if G_MARKF then G_MARKF("CHUNK") end
     c.step = nil
     if #dataOrder >= MAX_DATA then
+        if G_MARKF then G_MARKF("DROPCHUNK") end
         local old = table.remove(dataOrder, 1)
         data[old] = nil
         dropBatch(old)
@@ -605,6 +607,7 @@ local PREFETCH_R = 900
 local pfX, pfY = nil, nil                     -- chunk de la cámara del último barrido completo
 local getTime = love.timer.getTime
 prefetch = function(x, y, budget)
+    if G_FLAGS and G_FLAGS.noprefetch then return end
     local ccx, ccy = floor(x / CW), floor(y / CW)
     if prefetchDone and pfX == ccx and pfY == ccy and not pend then return end
     local t0 = getTime()
@@ -1275,6 +1278,7 @@ local function loadTileset(bi)
     local ok, img = pcall(lg.newImage, U.img('img/tiles/' .. bi))
     if not ok or not img then
         print('[World] no se pudo cargar img/tiles/' .. bi .. ': ' .. tostring(img))
+        if G_STEP then G_STEP("FALLO al cargar img/tiles/" .. bi .. ": " .. tostring(img), true) end
         return nil
     end
     if img.setFilter then pcall(img.setFilter, img, 'nearest', 'nearest') end
@@ -1489,8 +1493,10 @@ local function chunkBatch(cx, cy, sub, f)
     for i = 1, #list do
         if list[i].key == nil then e = list[i] break end
     end
+    if G_MARKF then G_MARKF(f and "LIQBATCH" or "BATCH") end
     if not e then
         if #list < pool.max then
+            if G_MARKF then G_MARKF("NEWBATCH" .. #list) end
             e = { key = nil, batch = lg.newSpriteBatch(tileset.img, pool.cap, 'static'), used = 0 }
             list[#list + 1] = e
         else
@@ -2048,8 +2054,9 @@ function W.drawFlat(list, t)
     t = t or U.now()
     local g = grassGen4()
     local b = nil
-    if g then
+    if g and not (G_FLAGS and G_FLAGS.noflat) then
         if flatBatchImg ~= g.img then
+            if G_MARKF then G_MARKF("FLATBATCH") end
             if flatBatch and flatBatch.release then pcall(flatBatch.release, flatBatch) end
             -- (En la consola, 'static' como los lotes del suelo, que se sabe que va;
             -- en el PC, 'dynamic', que se rellena cada fotograma sin atascar la GPU.)
