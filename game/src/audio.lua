@@ -20,6 +20,14 @@ G.Audio = A
 local MAX_VOICES = 12          -- efectos sonando a la vez (la web permitía 24)
 local POOL = 3                 -- clones por efecto para solapar repeticiones
 local DEFAULT_GAP = 0.04       -- separación mínima entre repeticiones (s)
+-- En la 3DS, LÖVE Potion suelta los canales que acaban desde otro hilo, sin proteger
+-- bien play/stop/clone del mismo sonido: con cientos de golpes por minuto la consola
+-- se acababa cerrando (confirmado: sin efectos no se cerraba). Allí, una sola copia de
+-- cada efecto, nunca se corta uno que está sonando (si ya suena, el nuevo se salta) y
+-- menos a la vez.
+local SAFE = love._potion_version ~= nil
+    or (love.system and love.system.getOS and love.system.getOS() == "Horizon")
+if SAFE then MAX_VOICES, POOL, DEFAULT_GAP = 6, 1, 0.08 end
 local FADE_IN, FADE_OUT = 0.8, 0.7
 -- Separaciones concretas de la web (ms -> s). "break" es palabra clave en Lua.
 local MIN_GAP = { hit = 0.045, faint = 0.06, xp = 0.035, coin = 0.05, grass = 0.07,
@@ -108,6 +116,7 @@ local function play(file, vol)
         if ok and c then p.n = p.n + 1; p[p.n] = c; s = c end
     end
     if not s then
+        if SAFE then return end              -- (no cortar uno que suena: ver SAFE)
         s = p[p.next]
         p.next = p.next % p.n + 1
         s:stop()

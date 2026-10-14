@@ -14,11 +14,13 @@ local hud = {}
 
 -- Estilos fijos de la fuente pixelada y textos cacheados (nada de tablas ni
 -- cadenas nuevas en cada fotograma ni en cada repintado del HUD).
-local BOX_DARK = { s = 2, color = "#383838", shadow = "#b8b8b0" }
+-- (baked: letras ya coloreadas de img/pixelfont_st; los colores deben coincidir con
+-- los de STYLES en tools/gen_pixelfont.py)
+local BOX_DARK = { s = 2, color = "#383838", shadow = "#b8b8b0", baked = "box" }
 local BOX_SHINY = { s = 2, color = "#50a8f0", shadow = "#b8b8b0" }
 local BOX_HP = { s = 1, color = "#58d080", noOutline = true }
-local STATS_ST = { s = 1, color = "#e8e4ff", shadow = "#3a3458" }
-local BURST_ST = { s = 1, color = "#ffffff", shadow = "#2a2440" }
+local STATS_ST = { s = 1, color = "#e8e4ff", shadow = "#3a3458", baked = "stats" }
+local BURST_ST = { s = 1, color = "#ffffff", shadow = "#2a2440", baked = "burst" }
 local LV_TXT = {}                          -- nivel -> "LV12"
 local BUFF_KEYS = { "atk", "spd", "def", "regen" }
 local BUFF_COL = { atk = "#ff6b4d", spd = "#7fe0ff", def = "#b0b8c8", regen = "#5fe08a" }
@@ -470,7 +472,7 @@ local function lidOf(f)
     end
     return lid
 end
-local NAME_ST = { s = 1.5, gap = 1, color = "#403f30", shadow = "#fbf6f0" }
+local NAME_ST = { s = 1.5, gap = 1, color = "#403f30", shadow = "#fbf6f0", baked = "name" }
 local FUSED_NAME = {}                -- nombre -> { [n] = "nombre +n" }
 
 -- Cómo se escribe el nombre de un movimiento en su botón (una o dos líneas, ya

@@ -103,3 +103,56 @@ for kind in kinds:
 out.append("}")
 open(os.path.join(ROOT, "game", "data", "pixelfont.lua"), "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
 print("glifos:", len(glyphs), "atlas:", AW, "x", H)
+
+# ---- Estilos ya coloreados (game/img/pixelfont_st.png + game/data/pixelfont_st.lua) ----
+# Para el HUD de la partida: cada letra ya lleva su color y su sombra (un solo dibujo
+# por letra, y todas las de un texto en un SpriteBatch, que en la 3DS no se puede
+# teñir). Mismo tamaño de caja que la capa "s" (w+1, h+1); la letra en (0, 0).
+#   nombre: (escala, color, sombra) — los mismos de los estilos de src/ui/run.lua
+STYLES = {
+    "box":   ("2",  "#383838", "#b8b8b0"),
+    "stats": ("1",  "#e8e4ff", "#3a3458"),
+    "name":  ("15", "#403f30", "#fbf6f0"),
+    "burst": ("1",  "#ffffff", "#2a2440"),
+}
+def rgba(h):
+    return (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16), 255)
+spieces = []
+for st in sorted(STYLES):
+    scale, col, shcol = STYLES[st]
+    for key in sorted(glyphs):
+        on, w, h = mask(glyphs[key], scale)
+        im = Image.new("RGBA", (w + 1, h + 1), (0, 0, 0, 0))
+        for dx, dy in ((1, 0), (0, 1), (1, 1)):
+            for (x0, y0) in on:
+                im.putpixel((x0 + dx, y0 + dy), rgba(shcol))
+        for (x0, y0) in on:
+            im.putpixel((x0, y0), rgba(col))
+        spieces.append((st, key, im))
+x, y, rowh, splace = 1, 1, 0, []
+for st, key, im in spieces:
+    if x + im.width + 1 > AW:
+        x, y, rowh = 1, y + rowh + 1, 0
+    splace.append((st, key, x, y, im))
+    x += im.width + 1
+    rowh = max(rowh, im.height)
+SH = 1
+while SH < y + rowh + 1:
+    SH *= 2
+assert SH <= 1024, SH
+satlas = Image.new("RGBA", (AW, SH), (0, 0, 0, 0))
+for st, key, px, py, im in splace:
+    satlas.paste(im, (px, py))
+satlas.save(os.path.join(ROOT, "game", "img", "pixelfont_st.png"))
+out = ["-- Generado por tools/gen_pixelfont.py: no editar a mano.",
+       "-- [estilo][glifo] = { x, y, w, h }: letra con su color y su sombra ya pintados.",
+       "return { w = %d, h = %d," % (AW, SH)]
+for st in sorted(STYLES):
+    out.append('  ["%s"] = {' % st)
+    for s2, key, px, py, im in splace:
+        if s2 == st:
+            out.append("    [%s] = { %d, %d, %d, %d }," % (lstr(key), px, py, im.width, im.height))
+    out.append("  },")
+out.append("}")
+open(os.path.join(ROOT, "game", "data", "pixelfont_st.lua"), "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
+print("estilos:", len(STYLES), "atlas:", AW, "x", SH)

@@ -225,14 +225,83 @@ blitRaw = function(g, x, y, s, gap)
     end
 end
 
+-- Estilos ya coloreados (tools/gen_pixelfont.py: img/pixelfont_st): cada letra con
+-- su color y su sombra en una sola imagen, y el texto entero en un SpriteBatch que
+-- se guarda mientras no cambie: un dibujo por texto en vez de dos por letra. Para
+-- el HUD de la partida, que se dibuja entero en cada fotograma (en la 3DS no se puede
+-- pintar en una imagen aparte). opts.baked = nombre del estilo (sus s/color/sombra
+-- deben ser los del generador). El SpriteBatch no se tiñe: sólo con alpha 1.
+local stAtlas, stTried, SQ = nil, false, {}
+local function loadStyles()
+    stTried = true
+    local okd, d = pcall(require, "data.pixelfont_st")
+    if not okd or not d then return end
+    local ok, im = pcall(lg.newImage, U.img("img/pixelfont_st"))
+    if not ok or not im or not lg.newSpriteBatch then return end
+    if im.setFilter then pcall(im.setFilter, im, "nearest", "nearest") end
+    stAtlas = im
+    for st, list in pairs(d) do
+        if type(list) == "table" then
+            local t = {}
+            for key, gl in pairs(GLYPHS) do
+                local r = list[key]
+                if r then t[gl] = lg.newQuad(r[1], r[2], r[3], r[4], d.w, d.h) end
+            end
+            SQ[st] = t
+        end
+    end
+end
+-- Lotes por estilo y texto; como mucho BATCH_MAX (al pasarse se sueltan todos).
+local batches, nBatches, BATCH_MAX = {}, 0, 64
+local function styledBatch(st, text, s, gap)
+    local byT = batches[st]
+    local e = byT and byT[text]
+    if e then return e end
+    local qs = SQ[st]
+    if not qs then return nil end
+    if nBatches >= BATCH_MAX then
+        for _, bt in pairs(batches) do
+            for _, b in pairs(bt) do if b.b.release then pcall(b.b.release, b.b) end end
+        end
+        batches, nBatches = {}, 0
+        byT = nil
+    end
+    local g = glyphsOf(text)
+    local ok, b = pcall(lg.newSpriteBatch, stAtlas, math.max(1, #g))
+    if not ok or not b then return nil end
+    local x, n = 0, 0
+    for k = 1, #g do
+        local gl = g[k]
+        local q = qs[gl]
+        if q then b:add(q, x, 0); n = n + 1 end
+        x = x + glyphW(gl, s) + gap
+    end
+    if not byT then byT = {}; batches[st] = byT end
+    e = { b = b, n = n }
+    byT[text] = e
+    nBatches = nBatches + 1
+    return e
+end
+
 -- Dibuja con contorno oscuro de 1 px y relleno cian con la mitad inferior algo
--- más clara, como el cartel de los juegos. opts: { s, color, shade, outline, alpha }
+-- más clara, como el cartel de los juegos. opts: { s, color, shade, outline, alpha, baked }
 function PF.print(text, x, y, opts)
     local s = (opts and opts.s) or 2
     local a = (opts and opts.alpha) or 1
     local gap = (opts and opts.gap) or math.floor(s)
-    local g = glyphsOf(text)
     x, y = math.floor(x + 0.5), math.floor(y + 0.5)
+    if opts and opts.baked and a >= 1 and not G_BAKING then
+        if not stTried then loadStyles() end
+        local e = stAtlas and styledBatch(opts.baked, text, s, gap)
+        if e then
+            if e.n > 0 and (not G_VERT_SPEND or G_VERT_SPEND(e.n * 6 - 4)) then
+                lg.setColor(1, 1, 1, 1)
+                lg.draw(e.b, x, y)
+            end
+            return
+        end
+    end
+    local g = glyphsOf(text)
     if opts and opts.shadow then
         -- Estilo de los menús de Platino: sombra clara abajo a la derecha.
         U.setColor(opts.shadow, a)
