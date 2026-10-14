@@ -26,7 +26,9 @@ function S.reset()
     acc = 0; bossIdx = 1; surgeT = 32; announce = nil; announceT = 0; preloadT = 0; gcT = 10
     G.Enemies.rollRun()
     local up = G.Stages.active() and G.Stages.upcomingDex(0, 80) or G.Enemies.upcomingDex(0, 80)
-    G.Sprites.preload(up, false)
+    -- De una en una (S.step): de golpe era ~0,5 s de parón al empezar en la consola.
+    -- Si sale un enemigo cuya hoja aún no está, se carga en ese momento.
+    G.Sprites.preloadSoon(up, false)
 end
 
 -- Enemigos por segundo según el minuto de la run.
