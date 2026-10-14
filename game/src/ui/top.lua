@@ -255,6 +255,11 @@ function T.pokemonCard(dex, opts)
     lg.setFont(font(10))
     U.setColor("#8fa3c4")
     lg.print(info.head, 190, 34)
+    -- Marca de la Pokédex: corona si es tu compañero, destello si lo tienes shiny.
+    if opts and opts.mark then
+        G.Icons.draw(opts.mark, 372, 33, 12)
+        lg.setColor(1, 1, 1, 1)
+    end
     lg.setFont(font(22))
     U.setColor("#ffffff")
     lg.print(own and p.name or "???", 190, 46)

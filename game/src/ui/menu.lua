@@ -30,7 +30,6 @@ for g = 1, 9 do GEN5[g] = GEN[g]:sub(1, 5); GENID[g] = "gen" .. g end
 local function idList(prefix)
     return setmetatable({}, { __index = function(t, i) local v = prefix .. i; t[i] = v; return v end })
 end
-local PAD3 = setmetatable({}, { __index = function(t, n) local v = UI.pad3(n); t[n] = v; return v end })
 
 -- Pokémon que tienes (U.count recorre toda la tabla): se recuenta como mucho una
 -- vez por segundo.
@@ -315,11 +314,11 @@ local DID = idList("d")
 local FX = { { "all", "Todos", "fall" }, { "own", "Tengo", "fown" }, { "miss", "Faltan", "fmiss" } }
 local dexMemo = { own = nil, ownTxt = "", page = nil, pages = nil, pageTxt = "" }
 
-local dexListVer = 0
+local thumbsRelease               -- (más abajo, con las miniaturas)
 local function rebuildList()
     local s = G.DB.save
     lazyReset()                   -- página nueva: comprobar otra vez qué hojas hay
-    dexListVer = dexListVer + 1
+    thumbsRelease(dexGen)         -- solo la hoja de miniaturas de la generación visible
     dexList = {}
     for _, p in ipairs(G.DEX) do
         if p.gen == dexGen then
@@ -344,45 +343,90 @@ local function selectDex(d)
     local shiny = s.shiny and s.shiny[d] ~= nil and d == s.partner and s.partnerShiny
     dexCard.dex = d
     dexCard.opts.own, dexCard.opts.shiny = own, shiny
+    dexCard.opts.mark = d == s.partner and "crown" or (s.shiny and s.shiny[d] ~= nil and "shiny") or nil
     dexCard.opts.footer = own and (d == s.partner and "Es tu compañero" or "Toca ELEGIR para que sea tu compañero") or nil
     G.TopUI.overlay = dexOverlay
 end
 
--- Textos de la rejilla (número y nombre de cada celda) para UI.textBlock.
-local dexTexts = {}
--- ¿Cabe el nombre en una línea de la celda? Los que no (pasan a una segunda línea
--- que tapa la celda de abajo) se escriben como antes, celda a celda.
-local nameFits = setmetatable({}, { __index = function(t, d)
-    local p = G.DEX_BY[d]
-    local v = UI.font(10):getWidth(p and p.name or "") <= CW - 2
-    t[d] = v
-    return v
-end })
-local function dexName(p, own)
-    if not own then return "???" end
-    return p.name
+-- Miniaturas de la rejilla (tools/gen_thumbs.py): el mismo fotograma quieto que
+-- dibuja G.Sprites.drawStill, pero sacado de una hoja de 512x256 por generación.
+-- Antes cada casilla cargaba la hoja ENTERA de su Pokémon (~40 ms cada una en la
+-- 3DS: tirones de 0,2-0,5 s al pasar de página). Solo se tiene cargada la hoja de
+-- la generación visible y se suelta al salir de la Pokédex. Se dibujan con
+-- lg.draw normal (no SpriteBatch): así se pueden teñir las siluetas.
+local THUMBS = nil                -- data/thumbs.lua (se lee al entrar la primera vez)
+local thumbImg, thumbQuad, thumbFailed = {}, {}, {}
+local function thumbSheet(i)
+    local sh = THUMBS.sheets[i]
+    if thumbFailed[i] and U.now() - thumbFailed[i] < 3 then return nil end
+    if G_MARKF then G_MARKF("THUMB:" .. sh.gen) end
+    local ok, img = pcall(lg.newImage, U.img(sh.path))
+    if not ok or not img then thumbFailed[i] = U.now() return nil end
+    if img.setFilter then pcall(img.setFilter, img, "nearest", "nearest") end
+    thumbFailed[i] = nil
+    thumbImg[i] = img
+    return img
 end
-local function dexTextsBuild(add)
-    local s = G.DB.save
-    local muted = UI.C.muted
-    local start = (dexPage - 1) * PER
-    for i = 1, PER do
-        local p = dexList[start + i]
-        if not p then break end
-        local x, y = 14 + ((i - 1) % COLS) * CW, 38 + math.floor((i - 1) / COLS) * CH
-        add(PAD3[p.dex], x + 2, y + 1, muted)
-        local own = s.owned[p.dex] ~= nil
-        if not own or nameFits[p.dex] then add(dexName(p, own), x, y + CH - 12, nil, CW - 2, "center") end
+-- Suelta las hojas de miniaturas que no sean de la generación keepGen (todas si es nil).
+function thumbsRelease(keepGen)
+    if not THUMBS then return end
+    for i, img in pairs(thumbImg) do
+        if THUMBS.sheets[i].gen ~= keepGen then
+            if img.release then pcall(img.release, img) end
+            thumbImg[i] = nil
+        end
     end
+end
+-- Pies en (x, y), a escala 0,5 (1 píxel de arte = 1 de pantalla), con el mismo
+-- redondeo que drawStill. false si el dex no tiene miniatura o no se pudo cargar.
+local function drawThumb(d, x, y)
+    local t = THUMBS and THUMBS[d]
+    if not t then return false end
+    local img = thumbImg[t[1]] or thumbSheet(t[1])
+    if not img then return false end
+    local q = thumbQuad[d]
+    if not q then
+        local sh = THUMBS.sheets[t[1]]
+        q = lg.newQuad(t[2], t[3], t[4], t[5], sh.w, sh.h)
+        thumbQuad[d] = q
+    end
+    lg.draw(img, q, U.round(x - t[6]), U.round(y - t[7]))
+    return true
+end
+
+-- Marco de cada casilla (tools/gen_dexcell.py): ya pintado en img/ui/dexcell.png,
+-- un lg.draw por casilla en vez de rectángulos redondeados. Variantes: 1 lo tienes,
+-- 2 no lo tienes, 3 seleccionada. Se carga al entrar y se suelta al salir.
+local cellImg, cellQuads = nil, nil
+local function cellLoad()
+    if cellImg then return end
+    local ok, img = pcall(lg.newImage, U.img("img/ui/dexcell"))
+    if not ok or not img then return end
+    if img.setFilter then pcall(img.setFilter, img, "nearest", "nearest") end
+    cellImg = img
+    if not cellQuads then
+        cellQuads = {}
+        for i = 1, 3 do cellQuads[i] = lg.newQuad((i - 1) * CW, 0, CW - 2, CH - 2, 256, 64) end
+    end
+end
+local function cellRelease()
+    if cellImg and cellImg.release then pcall(cellImg.release, cellImg) end
+    cellImg = nil
 end
 
 function dex.enter()
     local s = G.DB.save
+    cellLoad()
+    if not THUMBS then
+        local ok, t = pcall(require, "data.thumbs")
+        THUMBS = ok and t or { sheets = {} }
+    end
     if not dexSel then dexSel = s.partner; dexGen = G.DEX_BY[s.partner].gen end
     ownedT = -1
     rebuildList()
     selectDex(dexSel)
 end
+function dex.leave() thumbsRelease(nil); cellRelease() end
 function dex.draw()
     local s = G.DB.save
     local C = UI.C
@@ -412,25 +456,28 @@ function dex.draw()
         local d = p.dex
         local own = owns[d] ~= nil
         local on = d == dexSel
-        U.setColor(on and "#2a3a1a" or (own and C.panel or "#0d1630"))
-        lg.rectangle("fill", x, y, CW - 2, CH - 2, 4, 4)
-        if on then U.setColor(C.gold); lg.rectangle("line", x + 0.5, y + 0.5, CW - 3, CH - 3, 4, 4) end
+        if cellImg then
+            lg.setColor(1, 1, 1, 1)
+            lg.draw(cellImg, cellQuads[on and 3 or (own and 1 or 2)], x, y)
+        else
+            U.setColor(on and "#2a3a1a" or (own and C.panel or "#0d1630"))
+            lg.rectangle("fill", x, y, CW - 2, CH - 2, 4, 4)
+            if on then U.setColor(C.gold); lg.rectangle("line", x + 0.5, y + 0.5, CW - 3, CH - 3, 4, 4) end
+        end
         if own then
             lg.setColor(1, 1, 1, 1)
         else
             lg.setColor(0.15, 0.18, 0.3, 1)
         end
-        stillLazy(d, x + CW / 2 - 1, y + CH - 12, 0.5)
+        -- (Solo el sprite: número, nombre y datos van en la ficha de arriba.)
+        if not drawThumb(d, x + CW / 2 - 1, y + CH - 12) then
+            stillLazy(d, x + CW / 2 - 1, y + CH - 12, 0.5)
+        end
         lg.setColor(1, 1, 1, 1)
         if d == partner then G.Icons.draw("crown", x + CW - 16, y + 2, 12)
         elseif shinies and shinies[d] then G.Icons.draw("shiny", x + CW - 16, y + 2, 12) end
-        -- Nombre largo (dos líneas): aquí, para que la celda de abajo tape la segunda.
-        if own and not nameFits[d] then UI.text(p.name, x, y + CH - 12, to(10, nil, CW - 2, "center")) end
         UI.hitbox(DID[start + i], x, y, CW - 2, CH - 2)
     end
-    -- Números y nombres de la página, todos en un dibujo (van encima de sprites e
-    -- iconos, que no se tocan con ellos).
-    UI.textBlock(dexTexts, 10, dexListVer * 1000 + dexPage, dexTextsBuild)
     local pages = math.max(1, math.ceil(#dexList / PER))
     if m.page ~= dexPage or m.pages ~= pages then m.page, m.pages = dexPage, pages; m.pageTxt = dexPage .. " / " .. pages end
     UI.button("prev", 14, 180, 40, 18, "<", bo(10, nil, nil, dexPage > 1))
