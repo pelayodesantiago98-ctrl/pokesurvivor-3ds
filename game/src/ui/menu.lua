@@ -9,13 +9,71 @@ local lg = love.graphics
 local W, H = UI.W, UI.H
 local GEN = UI.GEN_NAMES
 
+-- Rendimiento (la 3DS interpreta Lua y es ~30 veces más lenta que el PC): cada
+-- fotograma no se crean tablas ni textos. Las opciones de los widgets van en una
+-- tabla reutilizada (UI.button y UI.text no la guardan) y los textos que dependen
+-- de datos se rehacen solo cuando cambian esos datos.
+local OPT = {}
+local function bo(size, on, color, enabled, textColor, icon)
+    OPT.size, OPT.on, OPT.color, OPT.enabled, OPT.textColor, OPT.icon = size, on, color, enabled, textColor, icon
+    return OPT
+end
+local TOPT = {}
+local function to(size, color, w, align)
+    TOPT.size, TOPT.color, TOPT.w, TOPT.align = size, color, w, align
+    return TOPT
+end
+-- Nombres cortos y ids de las pestañas de generación.
+local GEN5, GENID = {}, {}
+for g = 1, 9 do GEN5[g] = GEN[g]:sub(1, 5); GENID[g] = "gen" .. g end
+-- Textos e ids numerados ("d12", "r3"...) hechos una sola vez.
+local function idList(prefix)
+    return setmetatable({}, { __index = function(t, i) local v = prefix .. i; t[i] = v; return v end })
+end
+local PAD3 = setmetatable({}, { __index = function(t, n) local v = UI.pad3(n); t[n] = v; return v end })
+
+-- Pokémon que tienes (U.count recorre toda la tabla): se recuenta como mucho una
+-- vez por segundo.
+local ownedN, ownedT = 0, -1
+local function ownedCount()
+    local now = U.now()
+    if now - ownedT > 1 then ownedT = now; ownedN = U.count(G.DB.save.owned) end
+    return ownedN
+end
+
+-- Línea de monedas y tickets de abajo (se rehace solo si cambian).
+local coinsMemo = { c = nil, t1 = nil, t10 = nil, txt = "", tw = 0 }
 local function coinsLine()
     local s = G.DB.save
     local t = s.tickets or { t1 = 0, t10 = 0 }
-    local txt = s.coins .. " monedas   ·   " .. (t.t1 or 0) .. " tickets   ·   " .. (t.t10 or 0) .. " tickets x10"
-    local tw = UI.font(10):getWidth(txt)
-    G.Icons.draw("coin", (W - tw) / 2 - 15, H - 15, 12)           -- icono de moneda delante
-    UI.text(txt, 0, H - 14, { size = 10, color = UI.C.gold, w = W, align = "center" })
+    local m = coinsMemo
+    if m.c ~= s.coins or m.t1 ~= t.t1 or m.t10 ~= t.t10 then
+        m.c, m.t1, m.t10 = s.coins, t.t1, t.t10
+        m.txt = s.coins .. " monedas   ·   " .. (t.t1 or 0) .. " tickets   ·   " .. (t.t10 or 0) .. " tickets x10"
+        m.tw = UI.font(10):getWidth(m.txt)
+    end
+    G.Icons.draw("coin", (W - m.tw) / 2 - 15, H - 15, 12)           -- icono de moneda delante
+    UI.text(m.txt, 0, H - 14, to(10, UI.C.gold, W, "center"))
+end
+
+-- Sprites quietos de las rejillas (Pokédex, gacha) cargando como mucho UNA hoja
+-- nueva por fotograma: cada hoja tarda ~40 ms en la 3DS y una página de la Pokédex
+-- son 18 (más de medio segundo parado al entrar o pasar de página). Las que ya
+-- están cargadas se dibujan siempre; las demás van apareciendo una a una.
+local lazyFrame, lazyBudget = -1, 0
+local lazyOk = {}                 -- dex -> true: ya dibujado (su hoja estaba cargada)
+local function lazyReset() lazyOk = {} end
+local function stillLazy(dex, x, y, scale)
+    local fr = UI.frame
+    if fr ~= lazyFrame then lazyFrame = fr; lazyBudget = 1 end
+    if lazyOk[dex] then return G.Sprites.drawStill(dex, x, y, scale) end
+    -- ¿Cargará una hoja? Se sabe por el número de hojas cargadas antes y después.
+    if lazyBudget <= 0 then return false end
+    local n0 = G.Sprites.loadedCount()
+    local ok = G.Sprites.drawStill(dex, x, y, scale)
+    if G.Sprites.loadedCount() ~= n0 then lazyBudget = lazyBudget - 1 end
+    lazyOk[dex] = true
+    return ok
 end
 
 -- ---------------- título ----------------
@@ -64,29 +122,82 @@ local function menuIcon(id)
     end
     return im or nil
 end
+-- Iconos con su cuadrado ya horneados en img/ui/menuicons (tools/bake_buttons):
+-- celdas de 33x33 cada 34 px, 4 por fila, en el orden de ITEMS. Si falta la
+-- imagen, se dibujan como antes (cuadrados + icono suelto).
+local menuAtlas, menuAtlasTried, menuAtlasQ = nil, false, {}
+local function menuIconQuad(i)
+    if not menuAtlasTried then
+        menuAtlasTried = true
+        local ok, im = pcall(lg.newImage, U.img('img/ui/menuicons'))
+        if ok and im then
+            if im.setFilter then pcall(im.setFilter, im, 'nearest', 'nearest') end
+            menuAtlas = im
+            local iw, ih = im:getWidth(), im:getHeight()
+            for k = 1, #ITEMS do
+                menuAtlasQ[k] = lg.newQuad(((k - 1) % 4) * 34, math.floor((k - 1) / 4) * 34, 33, 33, iw, ih)
+            end
+        end
+    end
+    return menuAtlasQ[i]
+end
 -- Texto blanco con sombra oscura (como en los botones de DS). En una sola línea:
 -- si no cabe en `w`, baja de tamaño (hasta 8).
 local function dsText(str, x, y, size, w, col, ink)
-    w = w or (W - x)
-    while size > 8 and UI.font(size):getWidth(str) > w do size = size - 1 end
-    lg.setFont(UI.font(size))
-    U.setColor(ink or "#000000", 0.55)
-    lg.printf(str, x + 1, y + 1, w, "left")
-    U.setColor(col or "#ffffff")
-    lg.printf(str, x, y, w, "left")
-    lg.setColor(1, 1, 1, 1)
+    UI.shadowText(str, x, y, size, w or (W - x), col, ink)
+end
+-- Color oscuro del borde del icono de cada botón (antes se calculaba cada fotograma).
+for _, it in ipairs(ITEMS) do it.dark = U.shade(it.color, -0.5) end
+-- Arriba, la ficha del compañero (la información va arriba y el menú abajo). Una
+-- sola función (no una nueva en cada entrada): top.lua escribe en la SD cada vez
+-- que cambia la ficha.
+local MENU_CARD = { own = true, shiny = false, footer = "Tu compañero" }
+local function menuOverlay()
+    local s = G.DB.save
+    MENU_CARD.shiny = s.partnerShiny and G.DB.ownsShiny(s.partner)
+    G.TopUI.pokemonCard(s.partner, MENU_CARD)
+end
+-- Textos de las barras (se rehacen solo si cambian monedas, tickets, dificultad...).
+local mm = { coins = nil, coinsTxt = "", cw = 0, dif = nil, difTxt = "", pend = -1, pendTxt = "",
+             t1 = nil, t10 = nil, own = nil, tTxt = "", tw = 0 }
+-- Nombres y descripciones de los botones grandes en dos bloques de texto (UI.textBlock):
+-- sombra (negro al 55 %, 1 px abajo a la derecha) y letra, como dsText.
+local MENU_TW = 151 - 50
+local function menuItemXY(i) return 6 + ((i - 1) % 2) * 157 + 44, 27 + math.floor((i - 1) / 2) * 47 end
+local menuLabels, menuSubs = {}, {}
+local function menuLabelsBuild(add)
+    for i = 1, #ITEMS do
+        local tx, y = menuItemXY(i)
+        add(ITEMS[i].label, tx + 1, y + 8, "#000000", MENU_TW, "left", 0.55)
+        add(ITEMS[i].label, tx, y + 7, "#ffffff", MENU_TW, "left")
+    end
+end
+local function menuSubsBuild(add)
+    local pend = mm.pend
+    for i = 1, #ITEMS do
+        local it = ITEMS[i]
+        local tx, y = menuItemXY(i)
+        local hot = it.id == "goals" and pend > 0
+        local sub = hot and mm.pendTxt or it.sub
+        add(sub, tx + 1, y + 25, "#000000", MENU_TW, "left", 0.55)
+        add(sub, tx, y + 24, hot and "#fff2a0" or "#f0f4ff", MENU_TW, "left")
+    end
+end
+-- ¿Caben todos a su tamaño (12 y 10)? Si alguno no, dsText lo achica: uno a uno.
+local function menuFits(pendTxt)
+    for i = 1, #ITEMS do
+        if not UI.fits(ITEMS[i].label, 12, MENU_TW) or not UI.fits(ITEMS[i].sub, 10, MENU_TW) then return false end
+    end
+    return UI.fits(pendTxt, 10, MENU_TW)
 end
 function menu.enter()
-    if G_STEP then G_STEP("menu.enter: logros") end
+    -- (Antes había dos G_STEP alrededor de checkAch: cada uno escribía en la SD,
+    -- ~20 ms en la consola.)
     G.Progress.checkAch()
-    if G_STEP then G_STEP("menu.enter: logros ok") end
     local s = G.DB.save
     G.Sprites.preload({ s.partner }, false)
-    -- Arriba, la ficha del compañero (la información va arriba y el menú abajo).
-    G.TopUI.overlay = function()
-        local sh = s.partnerShiny and G.DB.ownsShiny(s.partner)
-        G.TopUI.pokemonCard(s.partner, { own = true, shiny = sh, footer = "Tu compañero" })
-    end
+    ownedT = -1
+    G.TopUI.overlay = menuOverlay
 end
 function menu.draw()
     local s = G.DB.save
@@ -95,43 +206,69 @@ function menu.draw()
     dsText("MENÚ", 8, 4, 12)
     -- Dificultad (toca para cambiar; L/R con el mando)
     local dif = G.Difficulty.get()
-    UI.button("difficulty", 54, 2, 118, 18, "Dificultad: " .. dif.name, { size = 10, color = dif.color })
+    if mm.dif ~= dif then mm.dif = dif; mm.difTxt = "Dificultad: " .. dif.name end
+    UI.button("difficulty", 54, 2, 118, 18, mm.difTxt, bo(10, nil, dif.color))
     -- Monedas con su icono delante
-    local coins = s.coins .. " monedas"
-    local cw = UI.font(12):getWidth(coins)
+    if mm.coins ~= s.coins then
+        mm.coins = s.coins
+        mm.coinsTxt = s.coins .. " monedas"
+        mm.cw = UI.font(12):getWidth(mm.coinsTxt)
+    end
+    local cw = mm.cw
     G.Icons.draw("coin", W - 8 - cw - 16, 5, 12)
-    dsText(coins, W - 8 - cw, 4, 12, cw + 2, UI.C.gold)
+    dsText(mm.coinsTxt, W - 8 - cw, 4, 12, cw + 2, UI.C.gold)
     local pend = G.Progress.pending()
+    if mm.pend ~= pend then
+        mm.pend = pend; mm.pendTxt = pend .. " premios"
+        mm.fit = menuFits(mm.pendTxt)
+    end
+    local textsFit = mm.fit
     -- Botones grandes
-    for i, it in ipairs(ITEMS) do
+    for i = 1, #ITEMS do
+        local it = ITEMS[i]
         local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
         local x, y, bw, bh = 6 + col * 157, 27 + row * 47, 151, 43
-        UI.button(it.id, x, y, bw, bh, "", { color = it.color, on = focus == i })
+        UI.button(it.id, x, y, bw, bh, "", bo(nil, focus == i, it.color))
         -- Icono en un cuadrado claro redondeado (como los iconos de HGSS), centrado
         local sx, sy, ss = x + 6, y + 6, 31
-        U.setColor(U.shade(it.color, -0.5))
-        lg.rectangle("fill", sx - 1, sy - 1, ss + 2, ss + 2, 6, 6)
-        U.setColor("#ffffff", 0.92)
-        lg.rectangle("fill", sx, sy, ss, ss, 5, 5)
-        lg.setColor(1, 1, 1, 1)
-        local im = menuIcon(it.id)
-        if im then
-            lg.draw(im, sx + math.floor((ss - im:getWidth()) / 2), sy + math.floor((ss - im:getHeight()) / 2))
+        local q = menuIconQuad(i)
+        if q then
+            lg.draw(menuAtlas, q, sx - 1, sy - 1)          -- ya horneado: un dibujo
+        else
+            U.setColor(it.dark)
+            lg.rectangle("fill", sx - 1, sy - 1, ss + 2, ss + 2, 6, 6)
+            U.setColor("#ffffff", 0.92)
+            lg.rectangle("fill", sx, sy, ss, ss, 5, 5)
+            lg.setColor(1, 1, 1, 1)
+            local im = menuIcon(it.id)
+            if im then
+                lg.draw(im, sx + math.floor((ss - im:getWidth()) / 2), sy + math.floor((ss - im:getHeight()) / 2))
+            end
         end
         -- Nombre y descripción, cada uno en una línea
-        local sub = it.sub
-        if it.id == "goals" and pend > 0 then sub = pend .. " premios" end
-        local tx, tw = x + 44, bw - 50
-        dsText(it.label, tx, y + 7, 12, tw)
-        dsText(sub, tx, y + 24, 10, tw, (it.id == "goals" and pend > 0) and "#fff2a0" or "#f0f4ff")
+        if not textsFit then
+            local hot = it.id == "goals" and pend > 0
+            local tx, tw = x + 44, bw - 50
+            dsText(it.label, tx, y + 7, 12, tw)
+            dsText(hot and mm.pendTxt or it.sub, tx, y + 24, 10, tw, hot and "#fff2a0" or "#f0f4ff")
+        end
+    end
+    if textsFit then
+        -- Todos caben a su tamaño: nombres y descripciones (con su sombra) en dos dibujos.
+        UI.textBlock(menuLabels, 12, 1, menuLabelsBuild)
+        UI.textBlock(menuSubs, 10, pend, menuSubsBuild)
     end
     -- Barra de abajo: tickets
     UI.bar2(H - 20, 20)
     local t = s.tickets or { t1 = 0, t10 = 0 }
-    local txt = (t.t1 or 0) .. " tickets   ·   " .. (t.t10 or 0) .. " tickets x10   ·   Pokédex " .. U.count(s.owned) .. "/" .. #G.DEX
-    local tw = UI.font(10):getWidth(txt)
-    G.Icons.draw("ticket", (W - tw) / 2 - 15, H - 16, 12)
-    UI.text(txt, 0, H - 15, { size = 10, color = UI.C.gold, w = W, align = "center" })
+    local own = ownedCount()
+    if mm.t1 ~= t.t1 or mm.t10 ~= t.t10 or mm.own ~= own then
+        mm.t1, mm.t10, mm.own = t.t1, t.t10, own
+        mm.tTxt = (t.t1 or 0) .. " tickets   ·   " .. (t.t10 or 0) .. " tickets x10   ·   Pokédex " .. own .. "/" .. #G.DEX
+        mm.tw = UI.font(10):getWidth(mm.tTxt)
+    end
+    G.Icons.draw("ticket", (W - mm.tw) / 2 - 15, H - 16, 12)
+    UI.text(mm.tTxt, 0, H - 15, to(10, UI.C.gold, W, "center"))
 end
 local function go(id)
     G.Audio.sfx(id == "play" and "confirm" or "click")
@@ -174,8 +311,15 @@ local COLS, ROWS, CW, CH = 6, 3, 48, 46
 local PER = COLS * ROWS
 local dexList = {}
 
+local DID = idList("d")
+local FX = { { "all", "Todos", "fall" }, { "own", "Tengo", "fown" }, { "miss", "Faltan", "fmiss" } }
+local dexMemo = { own = nil, ownTxt = "", page = nil, pages = nil, pageTxt = "" }
+
+local dexListVer = 0
 local function rebuildList()
     local s = G.DB.save
+    lazyReset()                   -- página nueva: comprobar otra vez qué hojas hay
+    dexListVer = dexListVer + 1
     dexList = {}
     for _, p in ipairs(G.DEX) do
         if p.gen == dexGen then
@@ -188,76 +332,119 @@ local function rebuildList()
     if dexPage > pages then dexPage = pages end
 end
 
+-- Ficha de arriba del Pokémon elegido: una sola función que lee dexCard (top.lua
+-- escribe en la SD cada vez que cambia la función de la ficha).
+local dexCard = { dex = nil, opts = { own = false, shiny = false, footer = nil } }
+local function dexOverlay() G.TopUI.pokemonCard(dexCard.dex, dexCard.opts) end
 local function selectDex(d)
     dexSel = d
     local s = G.DB.save
     local own = s.owned[d] ~= nil
     G.Sprites.preload({ d }, false)
     local shiny = s.shiny and s.shiny[d] ~= nil and d == s.partner and s.partnerShiny
-    G.TopUI.overlay = function()
-        G.TopUI.pokemonCard(d, { own = own, shiny = shiny, footer = own and (d == s.partner and "Es tu compañero" or "Toca ELEGIR para que sea tu compañero") or nil })
+    dexCard.dex = d
+    dexCard.opts.own, dexCard.opts.shiny = own, shiny
+    dexCard.opts.footer = own and (d == s.partner and "Es tu compañero" or "Toca ELEGIR para que sea tu compañero") or nil
+    G.TopUI.overlay = dexOverlay
+end
+
+-- Textos de la rejilla (número y nombre de cada celda) para UI.textBlock.
+local dexTexts = {}
+-- ¿Cabe el nombre en una línea de la celda? Los que no (pasan a una segunda línea
+-- que tapa la celda de abajo) se escriben como antes, celda a celda.
+local nameFits = setmetatable({}, { __index = function(t, d)
+    local p = G.DEX_BY[d]
+    local v = UI.font(10):getWidth(p and p.name or "") <= CW - 2
+    t[d] = v
+    return v
+end })
+local function dexName(p, own)
+    if not own then return "???" end
+    return p.name
+end
+local function dexTextsBuild(add)
+    local s = G.DB.save
+    local muted = UI.C.muted
+    local start = (dexPage - 1) * PER
+    for i = 1, PER do
+        local p = dexList[start + i]
+        if not p then break end
+        local x, y = 14 + ((i - 1) % COLS) * CW, 38 + math.floor((i - 1) / COLS) * CH
+        add(PAD3[p.dex], x + 2, y + 1, muted)
+        local own = s.owned[p.dex] ~= nil
+        if not own or nameFits[p.dex] then add(dexName(p, own), x, y + CH - 12, nil, CW - 2, "center") end
     end
 end
 
 function dex.enter()
     local s = G.DB.save
     if not dexSel then dexSel = s.partner; dexGen = G.DEX_BY[s.partner].gen end
+    ownedT = -1
     rebuildList()
     selectDex(dexSel)
 end
 function dex.draw()
     local s = G.DB.save
+    local C = UI.C
     -- Pestañas de generación
     for g = 1, 9 do
         local x = 2 + (g - 1) * 35
-        UI.button("gen" .. g, x, 2, 33, 16, GEN[g]:sub(1, 5), { size = 10, on = g == dexGen })
+        UI.button(GENID[g], x, 2, 33, 16, GEN5[g], bo(10, g == dexGen))
     end
     -- Filtros
-    local FX = { { "all", "Todos" }, { "own", "Tengo" }, { "miss", "Faltan" } }
-    for i, f in ipairs(FX) do
-        UI.button("f" .. f[1], 2 + (i - 1) * 50, 21, 48, 14, f[2], { size = 10, on = dexFilter == f[1] })
+    for i = 1, 3 do
+        local f = FX[i]
+        UI.button(f[3], 2 + (i - 1) * 50, 21, 48, 14, f[2], bo(10, dexFilter == f[1]))
     end
-    local owned = U.count(s.owned)
-    UI.text(owned .. " / " .. #G.DEX, 160, 22, { size = 10, color = UI.C.muted, w = 156, align = "right" })
+    local m = dexMemo
+    local owned = ownedCount()
+    if m.own ~= owned then m.own = owned; m.ownTxt = owned .. " / " .. #G.DEX end
+    UI.text(m.ownTxt, 160, 22, to(10, C.muted, 156, "right"))
     -- Rejilla
+    if m.lazyPage ~= dexPage then m.lazyPage = dexPage; lazyReset() end
     local start = (dexPage - 1) * PER
+    local owns, shinies, partner = s.owned, s.shiny, s.partner
     for i = 1, PER do
         local p = dexList[start + i]
         if not p then break end
         local c, r = (i - 1) % COLS, math.floor((i - 1) / COLS)
         local x, y = 14 + c * CW, 38 + r * CH
-        local own = s.owned[p.dex] ~= nil
-        local on = p.dex == dexSel
-        U.setColor(on and "#2a3a1a" or (own and UI.C.panel or "#0d1630"))
+        local d = p.dex
+        local own = owns[d] ~= nil
+        local on = d == dexSel
+        U.setColor(on and "#2a3a1a" or (own and C.panel or "#0d1630"))
         lg.rectangle("fill", x, y, CW - 2, CH - 2, 4, 4)
-        if on then U.setColor(UI.C.gold); lg.rectangle("line", x + 0.5, y + 0.5, CW - 3, CH - 3, 4, 4) end
-        lg.setColor(1, 1, 1, 1)
+        if on then U.setColor(C.gold); lg.rectangle("line", x + 0.5, y + 0.5, CW - 3, CH - 3, 4, 4) end
         if own then
-            G.Sprites.drawStill(p.dex, x + CW / 2 - 1, y + CH - 12, 0.5)
+            lg.setColor(1, 1, 1, 1)
         else
             lg.setColor(0.15, 0.18, 0.3, 1)
-            G.Sprites.drawStill(p.dex, x + CW / 2 - 1, y + CH - 12, 0.5)
-            lg.setColor(1, 1, 1, 1)
         end
-        UI.text(UI.pad3(p.dex), x + 2, y + 1, { size = 10, color = UI.C.muted })
-        if p.dex == s.partner then G.Icons.draw("crown", x + CW - 16, y + 2, 12)
-        elseif s.shiny and s.shiny[p.dex] then G.Icons.draw("shiny", x + CW - 16, y + 2, 12) end
-        UI.text(own and p.name or "???", x, y + CH - 12, { size = 10, w = CW - 2, align = "center" })
-        UI.hitbox("d" .. (start + i), x, y, CW - 2, CH - 2)
+        stillLazy(d, x + CW / 2 - 1, y + CH - 12, 0.5)
+        lg.setColor(1, 1, 1, 1)
+        if d == partner then G.Icons.draw("crown", x + CW - 16, y + 2, 12)
+        elseif shinies and shinies[d] then G.Icons.draw("shiny", x + CW - 16, y + 2, 12) end
+        -- Nombre largo (dos líneas): aquí, para que la celda de abajo tape la segunda.
+        if own and not nameFits[d] then UI.text(p.name, x, y + CH - 12, to(10, nil, CW - 2, "center")) end
+        UI.hitbox(DID[start + i], x, y, CW - 2, CH - 2)
     end
+    -- Números y nombres de la página, todos en un dibujo (van encima de sprites e
+    -- iconos, que no se tocan con ellos).
+    UI.textBlock(dexTexts, 10, dexListVer * 1000 + dexPage, dexTextsBuild)
     local pages = math.max(1, math.ceil(#dexList / PER))
-    UI.button("prev", 14, 180, 40, 18, "<", { size = 10, enabled = dexPage > 1 })
-    UI.text(dexPage .. " / " .. pages, 58, 183, { size = 10, color = UI.C.muted, w = 60, align = "center" })
-    UI.button("next", 122, 180, 40, 18, ">", { size = 10, enabled = dexPage < pages })
+    if m.page ~= dexPage or m.pages ~= pages then m.page, m.pages = dexPage, pages; m.pageTxt = dexPage .. " / " .. pages end
+    UI.button("prev", 14, 180, 40, 18, "<", bo(10, nil, nil, dexPage > 1))
+    UI.text(m.pageTxt, 58, 183, to(10, C.muted, 60, "center"))
+    UI.button("next", 122, 180, 40, 18, ">", bo(10, nil, nil, dexPage < pages))
     local sel = dexSel and G.DEX_BY[dexSel]
     local hasSh = dexSel and G.DB.ownsShiny(dexSel)
-    local canPick = sel and s.owned[dexSel] and (dexSel ~= s.partner or (hasSh and s.partnerShiny))
-    UI.button("pick", 170, 180, 136, 18, "Elegir de compañero", { size = 10, color = "#3c9c54", enabled = canPick == true })
-    UI.button("back", 14, 206, 100, 20, "Volver", { size = 10 })
+    local canPick = sel and owns[dexSel] and (dexSel ~= partner or (hasSh and s.partnerShiny))
+    UI.button("pick", 170, 180, 136, 18, "Elegir de compañero", bo(10, nil, "#3c9c54", canPick == true))
+    UI.button("back", 14, 206, 100, 20, "Volver", bo(10))
     if hasSh then
-        local isShinyPartner = dexSel == s.partner and s.partnerShiny
+        local isShinyPartner = dexSel == partner and s.partnerShiny
         UI.button("pickshiny", 170, 204, 136, 18, isShinyPartner and "Compañero shiny *" or "Elegir shiny *",
-                  { size = 10, color = "#3c6cc4", enabled = not isShinyPartner })
+                  bo(10, nil, "#3c6cc4", not isShinyPartner))
     end
     coinsLine()
 end
@@ -303,6 +490,8 @@ UI.register("dex", dex)
 local upg = {}
 local upgDex = nil
 local upgList = {}
+local UPG_CARD = { footer = "Las mejoras son de cada Pokémon: solo cuentan cuando juegas con él" }
+local function upgOverlay() G.TopUI.pokemonCard(upgDex, UPG_CARD) end
 function upg.enter()
     local s = G.DB.save
     upgList = {}
@@ -313,42 +502,66 @@ function upg.enter()
     end)
     if not upgDex or not s.owned[upgDex] then upgDex = s.partner end
     G.Sprites.preload({ upgDex }, false)
-    G.TopUI.overlay = function() G.TopUI.pokemonCard(upgDex, { footer = "Las mejoras son de cada Pokémon: solo cuentan cuando juegas con él" }) end
+    G.TopUI.overlay = upgOverlay
 end
+local BUYID = idList("buy")
+local upgTexts, upgBan = {}, false
+local function upgTextsBuild(add)
+    local muted = UI.C.muted
+    local LIST = G.Upgrades.LIST
+    for i = 1, #LIST do
+        local u = LIST[i]
+        local y = 25 + (i - 1) * 15
+        add(u.name, 22, y + 1)
+        if not (u.id == "ban" and upgBan) then add(u.unit, 90, y + 1, muted) end
+    end
+end
+local COSTTXT = setmetatable({}, { __index = function(t, c) local v = tostring(c); t[c] = v; return v end })
+local um0 = { dex = nil, partner = nil, name = "", coins = nil, coinsTxt = "", ban = nil, lvl = nil, banTxt = "" }
 function upg.draw()
     local s = G.DB.save
+    local C = UI.C
     local levels = G.DB.upgradesOf(upgDex)
-    local mon = G.DEX_BY[upgDex]
-    UI.button("prevmon", 4, 4, 22, 18, "<", { size = 10 })
-    UI.text(mon.name .. (upgDex == s.partner and " (compañero)" or ""), 28, 7, { size = 12, w = 180, align = "center" })
-    UI.button("nextmon", 210, 4, 22, 18, ">", { size = 10 })
-    UI.text(s.coins .. " monedas", 236, 7, { size = 10, color = UI.C.gold, w = 80, align = "right" })
+    local m = um0
+    if m.dex ~= upgDex or m.partner ~= s.partner then
+        m.dex, m.partner = upgDex, s.partner
+        m.name = G.DEX_BY[upgDex].name .. (upgDex == s.partner and " (compañero)" or "")
+    end
+    if m.coins ~= s.coins then m.coins = s.coins; m.coinsTxt = s.coins .. " monedas" end
+    UI.button("prevmon", 4, 4, 22, 18, "<", bo(10))
+    UI.text(m.name, 28, 7, to(12, nil, 180, "center"))
+    UI.button("nextmon", 210, 4, 22, 18, ">", bo(10))
+    UI.text(m.coinsTxt, 236, 7, to(10, C.gold, 80, "right"))
     -- (13 mejoras: filas de 15 px para que quepan todas.)
-    for i, u in ipairs(G.Upgrades.LIST) do
+    -- Nombres y unidades, en un solo dibujo (la unidad del Veto no sale si ya
+    -- tiene nivel: ahí va el botón "Elegir").
+    local banOn = (levels.ban or 0) > 0
+    upgBan = banOn
+    UI.textBlock(upgTexts, 10, banOn and 1 or 0, upgTextsBuild)
+    local LIST = G.Upgrades.LIST
+    for i = 1, #LIST do
+        local u = LIST[i]
         local y = 25 + (i - 1) * 15
         local lvl = levels[u.id] or 0
         local maxed = lvl >= u.max
         local cost = maxed and 0 or G.Upgrades.cost(u.id, lvl)
         G.Icons.draw(u.icon, 6, y, 12)
-        UI.text(u.name, 22, y + 1, { size = 10 })
         if u.id == "ban" and lvl > 0 then
             -- Veto: elegir los movimientos vetados (pantalla "upgmoves").
             local n = #(G.MenuUI.banList(upgDex))
-            UI.button("pickban", 88, y, 104, 14, "Elegir (" .. math.min(n, lvl) .. "/" .. lvl .. ")", { size = 10, color = "#d04848" })
-        else
-            UI.text(u.unit, 90, y + 1, { size = 10, color = UI.C.muted })
+            if m.ban ~= n or m.lvl ~= lvl then m.ban, m.lvl = n, lvl; m.banTxt = "Elegir (" .. math.min(n, lvl) .. "/" .. lvl .. ")" end
+            UI.button("pickban", 88, y, 104, 14, m.banTxt, bo(10, nil, "#d04848"))
         end
-        for k = 1, u.max do
-            U.setColor(k <= lvl and UI.C.gold or "#2a3350")
-            lg.rectangle("fill", 196 + (k - 1) * 6, y + 3, 4, 8)
-        end
-        lg.setColor(1, 1, 1, 1)
+        -- Marcas de nivel: las conseguidas en dorado y las que faltan en oscuro.
+        local got = math.min(lvl, u.max)
+        UI.pips(196, y + 3, got, C.gold)
+        UI.pips(196 + got * 6, y + 3, u.max - got, "#2a3350")
         local can = not maxed and s.coins >= cost
-        UI.button("buy" .. i, 262, y, 54, 14, maxed and "Máx." or tostring(cost), { size = 10, color = can and "#2a2410" or nil, enabled = can,
-                  textColor = can and UI.C.gold or nil })
+        UI.button(BUYID[i], 262, y, 54, 14, maxed and "Máx." or COSTTXT[cost], bo(10, nil, can and "#2a2410" or nil, can,
+                  can and C.gold or nil))
     end
-    UI.button("back", 56, 222, 100, 16, "Volver", { size = 10 })
-    UI.button("binds", 164, 222, 100, 16, "Atajos", { size = 10, color = "#3c8c5a" })
+    UI.button("back", 56, 222, 100, 16, "Volver", bo(10))
+    UI.button("binds", 164, 222, 100, 16, "Atajos", bo(10, nil, "#3c8c5a"))
 end
 function upg.touch(x, y)
     local id = UI.hit(x, y)
@@ -497,54 +710,77 @@ UI.register("upgmoves", um)
 -- ---------------- gacha ----------------
 local gacha = {}
 local gGen, gResults, gIdx = 1, {}, 0
-function gacha.enter()
-    gResults = {}
-    G.TopUI.overlay = function()
-        if #gResults > 0 and gIdx >= 1 then
-            local r = gResults[gIdx]
-            local p = G.DEX_BY[r.dex]
-            G.TopUI.pokemonCard(r.dex, { shiny = r.shiny, footer = (r.shiny and "¡SHINY! " or "") .. (r.isNew and "¡Nuevo!" or ("Repetido: +" .. (r.coins or 0) .. " monedas")) .. "  (" .. gIdx .. "/" .. #gResults .. ")" })
-        else
-            UI.text("Banner de " .. GEN[gGen], 0, 100, { size = 22, color = UI.C.gold, w = 400, align = "center" })
+-- Arriba: el resultado elegido o el banner. Una sola función; los textos se hacen
+-- al tirar o al cambiar de banner, no en cada fotograma.
+local gCard = { shiny = false, footer = "" }
+local gTop = { key = nil, gen = nil, title = "", feat = nil }
+local function gachaOverlay()
+    if #gResults > 0 and gIdx >= 1 then
+        local r = gResults[gIdx]
+        local k = gIdx * 1000 + #gResults
+        if gTop.key ~= k or gTop.res ~= gResults then
+            gTop.key, gTop.res = k, gResults
+            gCard.shiny = r.shiny
+            gCard.footer = (r.shiny and "¡SHINY! " or "") .. (r.isNew and "¡Nuevo!" or ("Repetido: +" .. (r.coins or 0) .. " monedas")) .. "  (" .. gIdx .. "/" .. #gResults .. ")"
+        end
+        G.TopUI.pokemonCard(r.dex, gCard)
+    else
+        if gTop.gen ~= gGen then
+            gTop.gen = gGen
+            gTop.title = "Banner de " .. GEN[gGen]
+            gTop.feat = nil
             local b = G.Gacha.banner and G.Gacha.banner(gGen)
             if b and b.featured then
                 local names = {}
                 for i, d in ipairs(b.featured) do names[i] = G.DEX_BY[d] and G.DEX_BY[d].name or tostring(d) end
-                UI.text("Destacados: " .. table.concat(names, " · "), 0, 130, { size = 12, w = 400, align = "center" })
+                gTop.feat = "Destacados: " .. table.concat(names, " · ")
             end
         end
+        UI.text(gTop.title, 0, 100, to(22, UI.C.gold, 400, "center"))
+        if gTop.feat then UI.text(gTop.feat, 0, 130, to(12, nil, 400, "center")) end
     end
 end
+function gacha.enter()
+    gResults = {}
+    lazyReset()
+    G.TopUI.overlay = gachaOverlay
+end
+local RID = idList("r")
+local gm = { pity = nil, rates = "" }
 function gacha.draw()
     local s = G.DB.save
+    local C = UI.C
     local t = s.tickets or { t1 = 0, t10 = 0 }
     for g = 1, 9 do
-        UI.button("gen" .. g, 2 + (g - 1) * 35, 2, 33, 16, GEN[g]:sub(1, 5), { size = 10, on = g == gGen })
+        UI.button(GENID[g], 2 + (g - 1) * 35, 2, 33, 16, GEN5[g], bo(10, g == gGen))
     end
     local pity = s.pity and s.pity[gGen] or (s.pity and s.pity[tostring(gGen)]) or 0
-    UI.text("Común 45% · Poco común 30% · Rara 17% · Épica 6,5% · Legendaria 1,5% · Shiny 1% · Pity " .. pity .. "/70",
-            4, 21, { size = 10, color = UI.C.muted, w = W - 8, align = "center" })
-    UI.button("p1", 10, 50, 96, 30, "Tirar x1\n1 ticket", { size = 10, enabled = (t.t1 or 0) >= 1 })
-    UI.button("p10", 112, 50, 96, 30, "Tirar x10\n10 tickets", { size = 10, enabled = (t.t1 or 0) >= 10 })
-    UI.button("p10b", 214, 50, 96, 30, "Tirar x10\n1 ticket x10", { size = 10, color = "#2a1a3a", enabled = (t.t10 or 0) >= 1 })
+    if gm.pity ~= pity then
+        gm.pity = pity
+        gm.rates = "Común 45% · Poco común 30% · Rara 17% · Épica 6,5% · Legendaria 1,5% · Shiny 1% · Pity " .. pity .. "/70"
+    end
+    UI.text(gm.rates, 4, 21, to(10, C.muted, W - 8, "center"))
+    UI.button("p1", 10, 50, 96, 30, "Tirar x1\n1 ticket", bo(10, nil, nil, (t.t1 or 0) >= 1))
+    UI.button("p10", 112, 50, 96, 30, "Tirar x10\n10 tickets", bo(10, nil, nil, (t.t1 or 0) >= 10))
+    UI.button("p10b", 214, 50, 96, 30, "Tirar x10\n1 ticket x10", bo(10, nil, "#2a1a3a", (t.t10 or 0) >= 1))
     -- Resultados
     if #gResults > 0 then
-        for i, r in ipairs(gResults) do
+        for i = 1, #gResults do
+            local r = gResults[i]
             local x, y = 10 + ((i - 1) % 5) * 60, 90 + math.floor((i - 1) / 5) * 56
             local on = i == gIdx
-            U.setColor(r.shiny and "#1a2a3a" or (on and "#2a3a1a" or UI.C.panel))
+            U.setColor(r.shiny and "#1a2a3a" or (on and "#2a3a1a" or C.panel))
             lg.rectangle("fill", x, y, 56, 50, 4, 4)
-            if on then U.setColor(UI.C.gold); lg.rectangle("line", x + 0.5, y + 0.5, 55, 49, 4, 4) end
+            if on then U.setColor(C.gold); lg.rectangle("line", x + 0.5, y + 0.5, 55, 49, 4, 4) end
             lg.setColor(1, 1, 1, 1)
-            G.Sprites.drawStill(r.dex, x + 28, y + 36, 0.5)
-            local p = G.DEX_BY[r.dex]
-            UI.text((r.isNew and "¡Nuevo! " or "") .. (p and p.name or ""), x, y + 38, { size = 10, w = 56, align = "center", color = r.isNew and UI.C.gold or UI.C.muted })
-            UI.hitbox("r" .. i, x, y, 56, 50)
+            stillLazy(r.dex, x + 28, y + 36, 0.5)
+            UI.text(r.label, x, y + 38, to(10, r.isNew and C.gold or C.muted, 56, "center"))
+            UI.hitbox(RID[i], x, y, 56, 50)
         end
     else
-        UI.text("Los tickets se ganan jugando: algunos Pokémon sueltan uno, los jefes y los legendarios dan tickets x10.", 20, 100, { size = 10, color = UI.C.muted, w = W - 40, align = "center" })
+        UI.text("Los tickets se ganan jugando: algunos Pokémon sueltan uno, los jefes y los legendarios dan tickets x10.", 20, 100, to(10, C.muted, W - 40, "center"))
     end
-    UI.button("back", 110, 206, 100, 18, "Volver", { size = 10 })
+    UI.button("back", 110, 206, 100, 18, "Volver", bo(10))
     coinsLine()
 end
 local function pull(n, payWith)
@@ -553,11 +789,17 @@ local function pull(n, payWith)
     if not res or #res == 0 then UI.toast("No tienes tickets suficientes") return end
     gResults = res
     gIdx = 1
-    local dexes = {}
-    for i, r in ipairs(res) do dexes[i] = r.dex end
-    G.Sprites.preload(dexes, false)
+    for _, r in ipairs(res) do
+        local p = G.DEX_BY[r.dex]
+        r.label = (r.isNew and "¡Nuevo! " or "") .. (p and p.name or "")
+    end
+    -- Solo la hoja del primero (el de la ficha de arriba); las de la rejilla se
+    -- cargan una por fotograma (stillLazy) en vez de 10 de golpe (~0,4 s en la 3DS).
+    G.Sprites.preload({ res[1].dex }, false)
+    lazyReset()
     G.Audio.sfx("legend")
-    G.DB.commit()
+    -- (G.Gacha.pull ya guarda la partida: otro commit era codificar y escribir en
+    -- la SD otra vez lo mismo.)
 end
 function gacha.touch(x, y)
     local id = UI.hit(x, y)
@@ -590,51 +832,78 @@ local function rewardText(r)
     if r.coins then p[#p + 1] = r.coins .. " monedas" end
     return table.concat(p, " + ")
 end
+-- Arriba, los logros conseguidos: los textos se hacen al entrar (antes se recorrían
+-- todos los logros y se montaban los textos en cada fotograma).
+local goalsTop = { head = "", lines = {}, titles = nil }
+local function goalsOverlay()
+    local C = UI.C
+    UI.text(goalsTop.head, 0, 20, to(16, C.gold, 400, "center"))
+    local lines = goalsTop.lines
+    for i = 1, #lines do UI.text(lines[i], 20, 44 + (i - 1) * 12, to(10, nil, 360)) end
+    if goalsTop.titles then UI.text(goalsTop.titles, 20, 222, to(10, C.muted, 360)) end
+end
+local function goalsRefresh()
+    local s = G.DB.save
+    goalsTop.head = "Logros: " .. U.count(s.ach or {}) .. " / " .. #G.AchDefs.LIST
+    local lines = {}
+    for _, a in ipairs(G.AchDefs.LIST) do
+        if s.ach and s.ach[a.id] then
+            lines[#lines + 1] = "· " .. a.name .. (a.title and ("  [" .. a.title .. "]") or "")
+            if #lines >= 15 then break end
+        end
+    end
+    goalsTop.lines = lines
+    local titles = G.Progress.titles()
+    goalsTop.titles = #titles > 0 and ("Títulos: " .. table.concat(titles, ", ")) or nil
+end
 function goals.enter()
     G.Progress.ensure(G.DB.save)
-    G.TopUI.overlay = function()
-        local s = G.DB.save
-        local n, total = U.count(s.ach or {}), #G.AchDefs.LIST
-        UI.text("Logros: " .. n .. " / " .. total, 0, 20, { size = 16, color = UI.C.gold, w = 400, align = "center" })
-        local y = 44
-        local shown = 0
-        for _, a in ipairs(G.AchDefs.LIST) do
-            if s.ach and s.ach[a.id] then
-                UI.text("· " .. a.name .. (a.title and ("  [" .. a.title .. "]") or ""), 20, y, { size = 10, w = 360 })
-                y = y + 12; shown = shown + 1
-                if shown >= 15 then break end
-            end
-        end
-        local titles = G.Progress.titles()
-        if #titles > 0 then UI.text("Títulos: " .. table.concat(titles, ", "), 20, 222, { size = 10, color = UI.C.muted, w = 360 }) end
+    goalsRefresh()
+    G.TopUI.overlay = goalsOverlay
+end
+-- Textos de cada misión (la tabla de la misión vive en el guardado): enunciado,
+-- premio y progreso, rehecho solo si cambia el progreso.
+local missionTxt = setmetatable({}, { __mode = "k" })
+local function mText(m)
+    local t = missionTxt[m]
+    if not t or t.goal ~= m.goal or t.id ~= m.id then
+        local def = G.MissionDefs.BY[m.id]
+        t = { id = m.id, goal = m.goal, txt = G.Progress.text(m), reward = rewardText(def and def.reward or {}), prog = nil, progTxt = "" }
+        missionTxt[m] = t
     end
+    local p = math.floor(m.prog)
+    if t.prog ~= p then t.prog = p; t.progTxt = p .. "/" .. m.goal end
+    return t
+end
+local GID = { [false] = idList("d"), [true] = idList("w") }
+local EMPTYL = {}
+local function goalBlock(label, list, weekly, y)
+    local C = UI.C
+    UI.text(label, 6, y, to(12, C.gold))
+    y = y + 16
+    list = list or EMPTYL
+    for i = 1, #list do
+        local m = list[i]
+        local t = mText(m)
+        local done = G.Progress.done(m)
+        UI.text(t.txt, 6, y, to(10, nil, 200))
+        UI.bar(6, y + 12, 200, 5, math.min(1, m.prog / m.goal), done and C.green or C.blue)
+        UI.text(t.progTxt, 210, y, to(10, C.muted))
+        if m.claimed then
+            UI.text("Recogido", 250, y + 3, to(10, C.muted))
+        else
+            UI.button(GID[weekly][i], 250, y, 66, 18, done and "Recoger" or t.reward, bo(10, nil, done and "#2a2410" or nil, done, done and C.gold or nil))
+        end
+        y = y + 24
+    end
+    return y
 end
 function goals.draw()
     local s = G.DB.save
-    local Mi = s.missions or {}
-    local y = 4
-    local function block(label, list, weekly)
-        UI.text(label, 6, y, { size = 12, color = UI.C.gold })
-        y = y + 16
-        for i, m in ipairs(list or {}) do
-            local def = G.MissionDefs.BY[m.id]
-            local done = G.Progress.done(m)
-            local txt = G.Progress.text(m)
-            UI.text(txt, 6, y, { size = 10, w = 200 })
-            UI.bar(6, y + 12, 200, 5, math.min(1, m.prog / m.goal), done and UI.C.green or UI.C.blue)
-            UI.text(math.floor(m.prog) .. "/" .. m.goal, 210, y, { size = 10, color = UI.C.muted })
-            local id = (weekly and "w" or "d") .. i
-            if m.claimed then
-                UI.text("Recogido", 250, y + 3, { size = 10, color = UI.C.muted })
-            else
-                UI.button(id, 250, y, 66, 18, done and "Recoger" or rewardText(def and def.reward or {}), { size = 10, enabled = done, color = done and "#2a2410" or nil, textColor = done and UI.C.gold or nil })
-            end
-            y = y + 24
-        end
-    end
-    block("Misiones diarias", Mi.daily, false)
-    block("Misiones semanales", Mi.weekly, true)
-    UI.button("back", 110, 216, 100, 18, "Volver", { size = 10 })
+    local Mi = s.missions or EMPTYL
+    local y = goalBlock("Misiones diarias", Mi.daily, false, 4)
+    goalBlock("Misiones semanales", Mi.weekly, true, y)
+    UI.button("back", 110, 216, 100, 18, "Volver", bo(10))
 end
 function goals.touch(x, y)
     local id = UI.hit(x, y)
@@ -645,7 +914,7 @@ function goals.touch(x, y)
         local Mi = G.DB.save.missions
         local list = kind == "w" and Mi.weekly or Mi.daily
         local m = list and list[tonumber(i)]
-        if m and G.Progress.claim(m, kind == "w") then G.Audio.sfx("confirm"); UI.toast("Premio recogido") end
+        if m and G.Progress.claim(m, kind == "w") then G.Audio.sfx("confirm"); UI.toast("Premio recogido"); goalsRefresh() end
     end
 end
 function goals.button(b) if b == "b" then UI.show("menu") end end
@@ -654,35 +923,47 @@ UI.register("goals", goals)
 -- ---------------- modo Fases ----------------
 local stages = {}
 local stSel = 1
+-- Ficha de arriba de la fase elegida: textos hechos al elegirla (stageInfo) y una
+-- sola función de ficha (top.lua escribe en la SD cada vez que cambia).
+local stTop = { st = nil, unlocked = false, fase = "", info = "", bosses = "", foot = "", footCol = nil }
+local function stagesOverlay()
+    local T, C = stTop, UI.C
+    lg.setColor(0, 0, 0, 0.45)
+    lg.rectangle("fill", 0, 0, 400, 240)
+    UI.text(T.fase, 0, 24, to(12, C.muted, 400, "center"))
+    UI.text(T.st.name, 0, 38, to(22, T.unlocked and C.gold or C.muted, 400, "center"))
+    UI.text(T.info, 0, 68, to(12, nil, 400, "center"))
+    UI.text(T.bosses, 0, 86, to(10, C.muted, 400, "center"))
+    -- Jefes dibujados
+    local bs = T.st.bosses
+    local n = #bs
+    for i = 1, n do
+        local x = 200 + (i - (n + 1) / 2) * 70
+        G.Sprites.drawStill(bs[i].dex, x, 170, 1)
+    end
+    UI.text(T.foot, 0, 196, to(12, T.footCol, 400, "center"))
+    UI.text("Tu Pokémon evoluciona durante la partida a sus niveles de los juegos", 0, 218, to(10, C.muted, 400, "center"))
+end
 local function stageInfo()
     local st = G.Stages.LIST[stSel]
     local unlocked = G.Stages.isUnlocked(stSel)
     local prog = G.Stages.progress()
     local e = prog[stSel] or prog[tostring(stSel)]
-    G.TopUI.overlay = function()
-        lg.setColor(0, 0, 0, 0.45)
-        lg.rectangle("fill", 0, 0, 400, 240)
-        UI.text("Fase " .. stSel, 0, 24, { size = 12, color = UI.C.muted, w = 400, align = "center" })
-        UI.text(st.name, 0, 38, { size = 22, color = unlocked and UI.C.gold or UI.C.muted, w = 400, align = "center" })
-        UI.text("10 minutos · 20 oleadas · " .. #st.bosses .. " jefes", 0, 68, { size = 12, w = 400, align = "center" })
-        local names = {}
-        for i, b in ipairs(st.bosses) do names[i] = G.DEX_BY[b.dex].name end
-        UI.text("Jefes: " .. table.concat(names, " → "), 0, 86, { size = 10, color = UI.C.muted, w = 400, align = "center" })
-        -- Jefes dibujados
-        local n = #st.bosses
-        for i, b in ipairs(st.bosses) do
-            local x = 200 + (i - (n + 1) / 2) * 70
-            G.Sprites.drawStill(b.dex, x, 170, 1)
-        end
-        if e and e.cleared then
-            UI.text("Superada · mejor tiempo " .. U.mmss(e.best or 0), 0, 196, { size = 12, color = UI.C.green, w = 400, align = "center" })
-        elseif not unlocked then
-            UI.text("Supera la fase anterior para desbloquearla", 0, 196, { size = 12, color = UI.C.red, w = 400, align = "center" })
-        else
-            UI.text("Derrota al jefe final para superar la fase", 0, 196, { size = 12, w = 400, align = "center" })
-        end
-        UI.text("Tu Pokémon evoluciona durante la partida a sus niveles de los juegos", 0, 218, { size = 10, color = UI.C.muted, w = 400, align = "center" })
+    local T, C = stTop, UI.C
+    T.st, T.unlocked = st, unlocked
+    T.fase = "Fase " .. stSel
+    T.info = "10 minutos · 20 oleadas · " .. #st.bosses .. " jefes"
+    local names = {}
+    for i, b in ipairs(st.bosses) do names[i] = G.DEX_BY[b.dex].name end
+    T.bosses = "Jefes: " .. table.concat(names, " → ")
+    if e and e.cleared then
+        T.foot, T.footCol = "Superada · mejor tiempo " .. U.mmss(e.best or 0), C.green
+    elseif not unlocked then
+        T.foot, T.footCol = "Supera la fase anterior para desbloquearla", C.red
+    else
+        T.foot, T.footCol = "Derrota al jefe final para superar la fase", nil
     end
+    G.TopUI.overlay = stagesOverlay
 end
 function stages.enter()
     -- Sólo los jefes de la fase que se ve (los de las demás se cargan al elegirla).
@@ -691,18 +972,26 @@ function stages.enter()
     G.Sprites.preload(dexes, false)
     stageInfo()
 end
+local SID = idList("s")
+local stLabel = {}             -- [i] = { cleared, texto }
 function stages.draw()
-    UI.text("Fases", 0, 4, { size = 16, color = UI.C.gold, w = W, align = "center" })
-    for i, st in ipairs(G.Stages.LIST) do
+    UI.text("Fases", 0, 4, to(16, UI.C.gold, W, "center"))
+    local LIST = G.Stages.LIST
+    for i = 1, #LIST do
+        local st = LIST[i]
         local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
         local x, y = 10 + col * 152, 26 + row * 40
         local unlocked = G.Stages.isUnlocked(i)
         local cleared = G.Stages.isCleared(i)
-        UI.button("s" .. i, x, y, 148, 34, (cleared and "* " or "") .. st.name, { size = 10, enabled = unlocked, on = i == stSel,
-                  color = cleared and "#1b3a2a" or nil })
+        local L = stLabel[i]
+        if not L or L[1] ~= cleared or L[3] ~= st.name then
+            L = { cleared, (cleared and "* " or "") .. st.name, st.name }
+            stLabel[i] = L
+        end
+        UI.button(SID[i], x, y, 148, 34, L[2], bo(10, i == stSel, cleared and "#1b3a2a" or nil, unlocked))
     end
-    UI.button("go", 170, 206, 140, 22, "Empezar fase", { size = 12, color = "#3c9c54", enabled = G.Stages.isUnlocked(stSel) })
-    UI.button("back", 10, 206, 100, 22, "Volver", { size = 10 })
+    UI.button("go", 170, 206, 140, 22, "Empezar fase", bo(12, nil, "#3c9c54", G.Stages.isUnlocked(stSel)))
+    UI.button("back", 10, 206, 100, 22, "Volver", bo(10))
 end
 function stages.touch(x, y)
     local id = UI.hit(x, y)
@@ -725,7 +1014,11 @@ UI.register("stages", stages)
 -- ---------------- tarjeta de entrenador ----------------
 local card = {}
 local ownedList = {}
+-- Medallas conseguidas, ordenadas. Se hacían (y ordenaban) tres veces por
+-- fotograma; en la tarjeta no cambian: se guardan al entrar (card.enter).
+local medalList = nil
 local function medals()
+    if medalList then return medalList end
     local s = G.DB.save
     local out = {}
     for _, a in ipairs(G.AchDefs.LIST) do
@@ -736,6 +1029,7 @@ local function medals()
         if (x.a.tier or 1) ~= (y.a.tier or 1) then return (x.a.tier or 1) > (y.a.tier or 1) end
         return (x.at or 0) > (y.at or 0)
     end)
+    medalList = out
     return out
 end
 -- Estilos "legacy" de Pokécharms (tools/gen_cards.py): fondo, entrenador y paneles
@@ -753,10 +1047,15 @@ local function cardImage(key, path)
     end
     return im or nil
 end
-local function releaseCardImages()
+-- Suelta las imágenes de la tarjeta (todas, o solo las de claves que empiezan por
+-- `prefix`: al cambiar de fondo no hace falta volver a cargar entrenador, paneles y
+-- Poké Balls, ~40 ms cada una en la 3DS).
+local function releaseCardImages(prefix)
     for k, im in pairs(cardImg) do
-        if im and im.release then pcall(im.release, im) end
-        cardImg[k] = nil
+        if not prefix or k:sub(1, #prefix) == prefix then
+            if im and im.release then pcall(im.release, im) end
+            cardImg[k] = nil
+        end
     end
 end
 local quadCache = {}
@@ -773,18 +1072,43 @@ local function pickIndex(list, id)
     return 1
 end
 
-local function statsPanel(x, y, w)
+-- ¿Tienes este Pokémon? (las claves del guardado pueden ser número o texto)
+local function owns(d)
+    local o = G.DB.save.owned or {}
+    return o[d] ~= nil or o[tostring(d)] ~= nil
+end
+
+-- Datos ya preparados de la tarjeta (textos, anchos, equipo, estilo). Antes se
+-- rehacían en cada fotograma (tablas, string.format, U.count, ordenar medallas...);
+-- ahora al entrar y al cambiar algo (cardDirty).
+local cd = nil
+local function cardDirty() cd = nil end
+local PFO = { s = 1, color = "#ffffff", noOutline = true }      -- opciones de PF.print (reutilizada)
+local function pfo(col) PFO.color = col; return PFO end
+local PNKEY = setmetatable({}, { __index = function(t, k) local v = { 'pn' .. k, 'img/panels/' .. k }; t[k] = v; return v end })
+local BALLKEY, BALLPATH = {}, {}
+for i = 1, 8 do BALLKEY[i] = 'ball' .. i; BALLPATH[i] = 'img/badges/' .. i end
+local function cardData()
+    if cd then return cd end
     local s = G.DB.save
-    local st = s.stats or {}
     local prof = s.profile or {}
+    local favs = prof.favs or {}
+    local st = s.stats or {}
     local PF = G.PixelFont
-    U.setColor("#101828", 0.88)
-    lg.rectangle("fill", x, y, w, 171, 6, 6)
-    U.setColor("#4a6ab8")
-    lg.rectangle("line", x + 0.5, y + 0.5, w - 1, 170, 6, 6)
-    local title = (prof.title and prof.title ~= "") and prof.title or "Novato"
-    PF.print(string.upper(title), x + (w - PF.width(string.upper(title), 1)) / 2, y + 7, { s = 1, color = "#ffd23f", noOutline = true })
-    local ms = medals()
+    cd = {}
+    -- Equipo: compañero y 5 favoritos; sólo salen los que tienes.
+    local src = { s.partner or false, favs[1] or false, favs[2] or false, favs[3] or false, favs[4] or false, favs[5] or false }
+    local team = {}
+    for i = 1, 6 do
+        local d = src[i]
+        team[i] = (d and owns(d)) and d or nil
+    end
+    cd.team = team
+    local ms, total = #medals(), #G.AchDefs.LIST
+    cd.have, cd.total = ms, total
+    -- Panel de datos (diseños que no son "de juego")
+    local title = string.upper((prof.title and prof.title ~= "") and prof.title or "Novato")
+    cd.title, cd.titleW = title, PF.width(title, 1)
     local rows = {
         { "DINERO", (s.coins or 0) .. " P" },
         { "POKEDEX", U.count(s.owned or {}) .. "/" .. #G.DEX },
@@ -792,24 +1116,68 @@ local function statsPanel(x, y, w)
         { "TIEMPO", U.mmss(st.playTime or 0) },
         { "MEJOR", U.mmss(st.bestTime or 0) },
         { "FASES", tostring(st.stagesCleared or 0) },
-        { "MEDALLAS", #ms .. "/" .. #G.AchDefs.LIST },
+        { "MEDALLAS", ms .. "/" .. total },
     }
     -- Cuántas faltan para la siguiente Poké Ball de la tarjeta.
+    cd.nextBall = nil
     for i = 1, 8 do
-        local need = math.ceil(i * #G.AchDefs.LIST / 8)
-        if #ms < need then rows[#rows + 1] = { "SIG. BALL", (need - #ms) .. " MEDALLAS" } break end
+        local need = math.ceil(i * total / 8)
+        if ms < need then
+            rows[#rows + 1] = { "SIG. BALL", (need - ms) .. " MEDALLAS" }
+            cd.nextBall = "SIG. BALL: " .. (need - ms)
+            cd.nextBallW = PF.width(cd.nextBall, 1)
+            break
+        end
     end
-    for i, r in ipairs(rows) do
-        local yy = y + 21 + (i - 1) * 18
-        PF.print(r[1], x + 7, yy, { s = 1, color = "#9fb4e8", noOutline = true })
-        PF.print(r[2], x + w - 7 - PF.width(r[2], 1), yy + 9, { s = 1, color = "#ffffff", noOutline = true })
+    for i = 1, #rows do rows[i][3] = PF.width(rows[i][2], 1) end
+    cd.rows = rows
+    cd.medTxt = "MEDALLAS " .. ms .. "/" .. total
+    cd.medW = PF.width(cd.medTxt, 1)
+    cd.equipoW = PF.width("EQUIPO", 1)
+    -- Tarjeta
+    cd.id = "ID " .. string.format("%05d", (s.created or 0) % 65536)
+    cd.name = string.upper(s.name or "Entrenador")
+    if CS and #CS.cards > 0 then
+        local c = CS.cards[pickIndex(CS.cards, prof.cardBg)]
+        cd.c = c
+        cd.bgKey, cd.bgPath = 'bg' .. c.id, 'img/cards/' .. c.id
+        local tr = CS.trainers[pickIndex(CS.trainers, prof.trainer)]
+        cd.tr = tr
+        if tr then cd.trKey, cd.trPath = 'tr' .. tr.atlas, 'img/trainers/' .. tr.atlas end
+        if c.layout == "game" then
+            local vals = {
+                name = cd.name,
+                money = (s.coins or 0) .. " P",
+                dex = U.count(s.owned or {}) .. "/" .. #G.DEX,
+                time = U.mmss(st.playTime or 0),
+                stages = tostring(st.stagesCleared or 0),
+            }
+            local rv = {}
+            for i, r in ipairs(c.rows) do
+                local v = vals[r[2]] or ""
+                rv[i] = { v, PF.width(v, 1) }
+            end
+            cd.rowVals = rv
+        end
     end
+    return cd
 end
 
--- ¿Tienes este Pokémon? (las claves del guardado pueden ser número o texto)
-local function owns(d)
-    local o = G.DB.save.owned or {}
-    return o[d] ~= nil or o[tostring(d)] ~= nil
+local function statsPanel(x, y, w)
+    local D = cardData()
+    local PF = G.PixelFont
+    U.setColor("#101828", 0.88)
+    lg.rectangle("fill", x, y, w, 171, 6, 6)
+    U.setColor("#4a6ab8")
+    lg.rectangle("line", x + 0.5, y + 0.5, w - 1, 170, 6, 6)
+    PF.print(D.title, x + (w - D.titleW) / 2, y + 7, pfo("#ffd23f"))
+    local rows = D.rows
+    for i = 1, #rows do
+        local r = rows[i]
+        local yy = y + 21 + (i - 1) * 18
+        PF.print(r[1], x + 7, yy, pfo("#9fb4e8"))
+        PF.print(r[2], x + w - 7 - r[3], yy + 9, pfo("#ffffff"))
+    end
 end
 
 -- Panel de 50x30 de un Pokémon: sprite oficial de Negro/Blanco si lo hay (1..649);
@@ -817,7 +1185,8 @@ end
 local function drawPanel(d, x, y)
     local p = d and CS and CS.panels[d]
     if p then
-        local im = cardImage('pn' .. p[1], 'img/panels/' .. p[1])
+        local k = PNKEY[p[1]]
+        local im = cardImage(k[1], k[2])
         if im then lg.setColor(1, 1, 1, 1); lg.draw(im, quadFor(p[2], p[3], 50, 30, im), x, y) end
     elseif d then
         U.setColor("#f4f6f8")
@@ -829,12 +1198,13 @@ end
 
 -- Panel derecho de los diseños "de juego": el equipo (los datos ya van en la tarjeta).
 local function teamPanel(x, y, w, team)
+    local D = cardData()
     U.setColor("#101828", 0.88)
     lg.rectangle("fill", x, y, w, 171, 6, 6)
     U.setColor("#4a6ab8")
     lg.rectangle("line", x + 0.5, y + 0.5, w - 1, 170, 6, 6)
     local PF = G.PixelFont
-    PF.print("EQUIPO", x + (w - PF.width("EQUIPO", 1)) / 2, y + 7, { s = 1, color = "#ffd23f", noOutline = true })
+    PF.print("EQUIPO", x + (w - D.equipoW) / 2, y + 7, pfo("#ffd23f"))
     local gx = x + math.floor((w - 106) / 2)
     for i = 1, 6 do
         -- Huecos separados (4 px entre uno y otro); vacíos si no tienes ese Pokémon.
@@ -845,65 +1215,43 @@ local function teamPanel(x, y, w, team)
         lg.rectangle("fill", px, py, 50, 30)
         drawPanel(team[i], px, py)
     end
-    local ms = #medals()
-    local txt = "MEDALLAS " .. ms .. "/" .. #G.AchDefs.LIST
-    PF.print(txt, x + (w - PF.width(txt, 1)) / 2, y + 128, { s = 1, color = "#9fb4e8", noOutline = true })
-    for i = 1, 8 do
-        local need = math.ceil(i * #G.AchDefs.LIST / 8)
-        if ms < need then
-            local t2 = "SIG. BALL: " .. (need - ms)
-            PF.print(t2, x + (w - PF.width(t2, 1)) / 2, y + 144, { s = 1, color = "#ffffff", noOutline = true })
-            break
-        end
+    PF.print(D.medTxt, x + (w - D.medW) / 2, y + 128, pfo("#9fb4e8"))
+    if D.nextBall then
+        PF.print(D.nextBall, x + (w - D.nextBallW) / 2, y + 144, pfo("#ffffff"))
     end
 end
 
 local function drawCard()
-    local s = G.DB.save
-    local prof = s.profile or {}
-    local favs = prof.favs or {}
+    local D = cardData()
     local CX, CY = 4, 34                      -- tarjeta a tamaño real (246x171)
-    -- Equipo: compañero y 5 favoritos; sólo salen los que tienes.
-    local team = {}
-    for i, d in ipairs({ s.partner or false, favs[1] or false, favs[2] or false, favs[3] or false, favs[4] or false, favs[5] or false }) do
-        team[i] = (d and owns(d)) and d or nil
-    end
-    if not CS or #CS.cards == 0 then statsPanel(CX + 250, CY, 400 - CX - 254) return end
-    local c = CS.cards[pickIndex(CS.cards, prof.cardBg)]
+    local team = D.team
+    if not D.c then statsPanel(CX + 250, CY, 400 - CX - 254) return end
+    local c = D.c
     local game = c.layout == "game"
     if game then teamPanel(CX + 250, CY, 400 - CX - 254, team) else statsPanel(CX + 250, CY, 400 - CX - 254) end
     lg.setColor(1, 1, 1, 1)
-    local bg = cardImage('bg' .. c.id, 'img/cards/' .. c.id)
+    local bg = cardImage(D.bgKey, D.bgPath)
     if bg then lg.draw(bg, CX, CY) end
     -- Entrenador (sprite oficial)
-    local tr = CS.trainers[pickIndex(CS.trainers, prof.trainer)]
+    local tr = D.tr
     if tr then
-        local im = cardImage('tr' .. tr.atlas, 'img/trainers/' .. tr.atlas)
+        local im = cardImage(D.trKey, D.trPath)
         if im then lg.draw(im, quadFor(tr.x, tr.y, 80, 80, im), CX + c.trainer[1], CY + c.trainer[2]) end
     end
     local PF = G.PixelFont
-    local id = string.format("%05d", (s.created or 0) % 65536)
     if game then
         -- Como en los juegos: título, número de ID y los datos en filas.
-        PF.print("TARJETA DE ENTRENADOR", CX + c.title[1], CY + c.title[2], { s = 1, color = c.titleColor, noOutline = true })
-        PF.print("ID " .. id, CX + c.code[1], CY + c.code[2], { s = 1, color = c.codeColor, noOutline = true })
-        local st = s.stats or {}
-        local vals = {
-            name = string.upper(s.name or "Entrenador"),
-            money = (s.coins or 0) .. " P",
-            dex = U.count(s.owned or {}) .. "/" .. #G.DEX,
-            time = U.mmss(st.playTime or 0),
-            stages = tostring(st.stagesCleared or 0),
-        }
-        for _, r in ipairs(c.rows) do
-            PF.print(r[1], CX + c.labelX, CY + r[3], { s = 1, color = c.labelColor, noOutline = true })
-            local v = vals[r[2]] or ""
-            PF.print(v, CX + c.valueX - PF.width(v, 1), CY + r[3], { s = 1, color = c.valueColor, noOutline = true })
+        PF.print("TARJETA DE ENTRENADOR", CX + c.title[1], CY + c.title[2], pfo(c.titleColor))
+        PF.print(D.id, CX + c.code[1], CY + c.code[2], pfo(c.codeColor))
+        local rv = D.rowVals
+        for i, r in ipairs(c.rows) do
+            PF.print(r[1], CX + c.labelX, CY + r[3], pfo(c.labelColor))
+            PF.print(rv[i][1], CX + c.valueX - rv[i][2], CY + r[3], pfo(c.valueColor))
         end
     else
-        PF.print("TARJETA DE ENTRENADOR", CX + 10, CY + 10, { s = 1, color = c.titleColor or "#ffffff", noOutline = true })
-        PF.print(string.upper(s.name or "Entrenador"), CX + c.name[1], CY + c.name[2] - 3, { s = 1, color = c.nameColor, noOutline = true })
-        PF.print("ID " .. id, CX + c.code[1], CY + c.code[2] - 3, { s = 1, color = c.codeColor, noOutline = true })
+        PF.print("TARJETA DE ENTRENADOR", CX + 10, CY + 10, pfo(c.titleColor or "#ffffff"))
+        PF.print(D.name, CX + c.name[1], CY + c.name[2] - 3, pfo(c.nameColor))
+        PF.print(D.id, CX + c.code[1], CY + c.code[2] - 3, pfo(c.codeColor))
         -- Equipo: compañero y 5 favoritos
         for i = 1, 6 do
             local pos = c.pokemon[i]
@@ -913,10 +1261,10 @@ local function drawCard()
     -- 8 Poké Balls de colores en los huecos de medalla: las medallas del juego se
     -- reparten en 8 tramos (con 127: 16, 32, 48... 127) y cada tramo cumplido
     -- desbloquea una. Las bloqueadas, en silueta.
-    local have, total = #medals(), #G.AchDefs.LIST
+    local have, total = D.have, D.total
     for i = 1, 8 do
         local pos = c.badges[i]
-        local im = pos and cardImage('ball' .. i, 'img/badges/' .. i)
+        local im = pos and cardImage(BALLKEY[i], BALLPATH[i])
         if im then
             local bx = CX + pos[1] + 8 - math.floor(im:getWidth() / 2)
             local by = CY + pos[2] + 8 - math.floor(im:getHeight() / 2)
@@ -930,6 +1278,30 @@ local function drawCard()
     end
     lg.setColor(1, 1, 1, 1)
 end
+-- Textos de la pantalla de abajo de la tarjeta (se rehacen con cardDirty).
+local cb = nil
+local FAVID = idList("fav")
+local function cardBottom()
+    if cb and cb.cd == cd and cd then return cb end
+    local D = cardData()
+    local s = G.DB.save
+    local prof = s.profile
+    cb = { cd = D }
+    if CS then
+        local ci = pickIndex(CS.cards, prof.cardBg)
+        cb.bgTxt = "Fondo: " .. CS.cards[ci].cat .. "  (" .. ci .. "/" .. #CS.cards .. ")"
+        local ti = pickIndex(CS.trainers, prof.trainer)
+        cb.trTxt = "Entrenador: " .. CS.trainers[ti].cat .. "  (" .. ti .. "/" .. #CS.trainers .. ")"
+    end
+    cb.fav = {}
+    for i = 1, 5 do
+        local d = prof.favs[i]
+        cb.fav[i] = (i + 1) .. ": " .. (d and owns(d) and G.DEX_BY[d] and G.DEX_BY[d].name or "—")
+    end
+    cb.nTitles = #G.Progress.titles()
+    cb.titleTxt = "Título: " .. (prof.title ~= "" and prof.title or "Novato")
+    return cb
+end
 function card.enter()
     local s = G.DB.save
     s.profile = s.profile or { favs = {}, title = "" }
@@ -938,45 +1310,40 @@ function card.enter()
     for d in pairs(s.owned or {}) do if G.DEX_BY[tonumber(d) or d] then ownedList[#ownedList + 1] = tonumber(d) or d end end
     table.sort(ownedList)
     G.Sprites.preload(s.profile.favs, false)
+    medalList = nil
+    cardDirty()
     G.TopUI.overlay = drawCard
 end
 function card.leave() releaseCardImages(); quadCache = {} end
 -- Fila "< etiqueta >" para recorrer una lista.
-local function cycler(id, y, label)
-    UI.button(id .. "-", 10, y, 34, 22, "<", { size = 12 })
-    UI.text(label, 46, y + 5, { size = 10, w = W - 92, align = "center" })
-    UI.button(id .. "+", W - 44, y, 34, 22, ">", { size = 12 })
+local function cycler(idm, idp, y, label)
+    UI.button(idm, 10, y, 34, 22, "<", bo(12))
+    UI.text(label, 46, y + 5, to(10, nil, W - 92, "center"))
+    UI.button(idp, W - 44, y, 34, 22, ">", bo(12))
 end
 function card.draw()
-    local s = G.DB.save
-    local prof = s.profile
-    UI.text("Tarjeta de entrenador", 0, 4, { size = 16, color = UI.C.gold, w = W, align = "center" })
+    local B = cardBottom()
+    UI.text("Tarjeta de entrenador", 0, 4, to(16, UI.C.gold, W, "center"))
     if CS then
-        local ci = pickIndex(CS.cards, prof.cardBg)
-        local c = CS.cards[ci]
-        cycler("bg", 26, "Fondo: " .. c.cat .. "  (" .. ci .. "/" .. #CS.cards .. ")")
-        local ti = pickIndex(CS.trainers, prof.trainer)
-        cycler("tr", 52, "Entrenador: " .. CS.trainers[ti].cat .. "  (" .. ti .. "/" .. #CS.trainers .. ")")
+        cycler("bg-", "bg+", 26, B.bgTxt)
+        cycler("tr-", "tr+", 52, B.trTxt)
     end
     -- Equipo: el 1 es tu compañero (se cambia en Pokémon); 2..6, favoritos.
     for i = 1, 5 do
-        local d = prof.favs[i]
         local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
-        UI.button("fav" .. i, 10 + col * 152, 80 + row * 26, 148, 22,
-                  (i + 1) .. ": " .. (d and owns(d) and G.DEX_BY[d] and G.DEX_BY[d].name or "—"), { size = 10 })
+        UI.button(FAVID[i], 10 + col * 152, 80 + row * 26, 148, 22, B.fav[i], bo(10))
     end
-    local titles = G.Progress.titles()
-    UI.button("title", 162, 132, 148, 22, "Título: " .. (prof.title ~= "" and prof.title or "Novato"),
-              { size = 10, enabled = #titles > 0 })
-    UI.text("Toca un hueco para cambiar de Pokémon. L/R: fondo · Cruceta: entrenador", 10, 162, { size = 10, color = UI.C.muted, w = W - 20, align = "center" })
-    UI.button("back", 110, 206, 100, 22, "Volver", { size = 10 })
+    UI.button("title", 162, 132, 148, 22, B.titleTxt, bo(10, nil, nil, B.nTitles > 0))
+    UI.text("Toca un hueco para cambiar de Pokémon. L/R: fondo · Cruceta: entrenador", 10, 162, to(10, UI.C.muted, W - 20, "center"))
+    UI.button("back", 110, 206, 100, 22, "Volver", bo(10))
 end
 local function cycle(field, list, step)
     local s = G.DB.save
     local i = pickIndex(list, s.profile[field])
     i = (i - 1 + step) % #list + 1
     s.profile[field] = list[i].id
-    releaseCardImages()
+    releaseCardImages(field == "cardBg" and "bg" or "tr")
+    cardDirty()
     G.Audio.sfx("select")
     G.DB.commit()
 end
@@ -996,6 +1363,7 @@ function card.touch(x, y)
         local titles = G.Progress.titles()
         local k = (U.indexOf(titles, prof.title) or 0) % #titles + 1
         prof.title = titles[k]
+        cardDirty()
         G.DB.commit()
         return
     end
@@ -1004,6 +1372,7 @@ function card.touch(x, y)
         local k = (U.indexOf(ownedList, prof.favs[i]) or 0) % #ownedList + 1
         prof.favs[i] = ownedList[k]
         G.Sprites.preload({ ownedList[k] }, false)
+        cardDirty()
         G.Audio.sfx("select")
         G.DB.commit()
     end

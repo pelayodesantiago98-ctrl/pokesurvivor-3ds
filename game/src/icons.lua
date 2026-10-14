@@ -48,6 +48,20 @@ local function itemImg(name)
     return im
 end
 
+-- "move:<id>" -> { "type_<tipo>", "fam_<familia>" } (cacheado: antes eran dos sub
+-- y dos concatenaciones por icono y fotograma). false si no es de movimiento; 0 si
+-- ese movimiento no existe.
+local moveParts = {}
+local function moveSplit(name)
+    local v = false
+    if name:sub(1, 5) == "move:" then
+        local m = G.Moves and G.Moves.BY_ID[name:sub(6)]
+        v = m and { "type_" .. m.type, "fam_" .. m.kind } or 0
+    end
+    moveParts[name] = v
+    return v
+end
+
 function I.draw(name, x, y, size)
     size = size or 12
     local it = itemImg(name)
@@ -57,13 +71,12 @@ function I.draw(name, x, y, size)
         lg.draw(it, x, y, 0, s, s)
         return
     end
-    if name:sub(1, 5) == "move:" then
-        local id = name:sub(6)
-        local m = G.Moves and G.Moves.BY_ID[id]
-        if m then
-            I.draw("type_" .. m.type, x, y, size)
-            I.draw("fam_" .. m.kind, x + size * 0.5, y + size * 0.5, size * 0.5)
-        end
+    local mv = moveParts[name]
+    if mv == nil then mv = moveSplit(name) end
+    if mv == 0 then return end                         -- movimiento que no existe
+    if mv then
+        I.draw(mv[1], x, y, size)
+        I.draw(mv[2], x + size * 0.5, y + size * 0.5, size * 0.5)
         return
     end
     local q = img and quads[name]
