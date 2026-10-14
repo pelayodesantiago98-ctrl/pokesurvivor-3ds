@@ -212,24 +212,46 @@ local function tkey(tx, ty) return tx * 1000003 + ty end
 
 -- ---------------- ruido ----------------
 
--- Las casillas vecinas caen casi siempre en la misma celda del ruido: se guardan
--- los 4 hashes de la última celda de cada semilla (mismo resultado, menos hashes).
-local nmx, nmy, nma, nmb, nmc, nmd = {}, {}, {}, {}, {}, {}
-local function vnoise(x, y, s)
+-- Hash de cada esquina de la rejilla del ruido, por semilla: una casilla y sus
+-- vecinas comparten esquinas, y al generar un trozo se consultan desordenadas
+-- (candidatas de los vecinos, bosquecillo, hierba...), así que guardar sólo la
+-- última celda fallaba casi siempre (~5000 hashes por trozo). Mismo resultado,
+-- ~4 veces menos hashes. Se vacía al pasar de LAT_MAX esquinas (memoria).
+local latC, latN = {}, 0
+local LAT_MAX = 20000                        -- (~900 esquinas por trozo nuevo)
+-- Ruido de valor (vnoise): interpolación suave entre los hashes de las 4 esquinas
+-- de la celda. fbm son dos octavas:
+--   vnoise(x, y, s) * 0.65 + vnoise(x * 2.13 + 17, y * 2.13 - 9, s + 1) * 0.35
+-- con vnoise escrita aquí dentro dos veces (en Lua 5.1 interpretado cada llamada
+-- cuesta, y esto se llama ~1500 veces por trozo). Mismas operaciones, mismo resultado.
+local function fbm(x, y, s)
     local xi, yi = floor(x), floor(y)
     local xf, yf = x - xi, y - yi
     local u, v = xf * xf * (3 - 2 * xf), yf * yf * (3 - 2 * yf)
-    local a, b, c, d
-    if nmx[s] == xi and nmy[s] == yi then
-        a, b, c, d = nma[s], nmb[s], nmc[s], nmd[s]
-    else
-        a, b, c, d = H(xi, yi, s), H(xi + 1, yi, s), H(xi, yi + 1, s), H(xi + 1, yi + 1, s)
-        nmx[s], nmy[s], nma[s], nmb[s], nmc[s], nmd[s] = xi, yi, a, b, c, d
-    end
-    return (a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v
-end
-local function fbm(x, y, s)
-    return vnoise(x, y, s) * 0.65 + vnoise(x * 2.13 + 17, y * 2.13 - 9, s + 1) * 0.35
+    local L = latC[s]
+    if not L then L = {}; latC[s] = L end
+    local k = xi * 1000003 + yi
+    local a, b, c, d = L[k], L[k + 1000003], L[k + 1], L[k + 1000004]
+    if not a then a = H(xi, yi, s); L[k] = a; latN = latN + 1 end
+    if not b then b = H(xi + 1, yi, s); L[k + 1000003] = b; latN = latN + 1 end
+    if not c then c = H(xi, yi + 1, s); L[k + 1] = c; latN = latN + 1 end
+    if not d then d = H(xi + 1, yi + 1, s); L[k + 1000004] = d; latN = latN + 1 end
+    local n1 = (a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v
+    -- Segunda octava.
+    x, y, s = x * 2.13 + 17, y * 2.13 - 9, s + 1
+    xi, yi = floor(x), floor(y)
+    xf, yf = x - xi, y - yi
+    u, v = xf * xf * (3 - 2 * xf), yf * yf * (3 - 2 * yf)
+    L = latC[s]
+    if not L then L = {}; latC[s] = L end
+    k = xi * 1000003 + yi
+    a, b, c, d = L[k], L[k + 1000003], L[k + 1], L[k + 1000004]
+    if not a then a = H(xi, yi, s); L[k] = a; latN = latN + 1 end
+    if not b then b = H(xi + 1, yi, s); L[k + 1000003] = b; latN = latN + 1 end
+    if not c then c = H(xi, yi + 1, s); L[k + 1] = c; latN = latN + 1 end
+    if not d then d = H(xi + 1, yi + 1, s); L[k + 1000004] = d; latN = latN + 1 end
+    if latN > LAT_MAX then latC, latN = {}, 0 end
+    return n1 * 0.65 + ((a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v) * 0.35
 end
 
 -- ---------------- terreno "puro" (sin caché) ----------------
@@ -249,21 +271,24 @@ local function arenaSafe(tx, ty)
 end
 
 local function terrainRaw(tx, ty)
-    local ad = arenaDist(tx, ty)
-    if ad < arenaOuter() then
-        if ad >= arena.r then return WALL end
-        if arenaSafe(tx, ty) then return FLOOR end
-        local th = arena.th
-        -- Columnas de 2×2 (cobertura) y charcos según el tipo de la arena.
-        if th.pillars and th.pillars > 0 and ad < arena.r - 2
-           and H(floor(tx / 2), floor(ty / 2), seed + 31 + arena.tx) < th.pillars then return WALL end
-        if th.pools and th.pools > 0 and ad < arena.r - 1.5
-           and fbm(tx / 3.2, ty / 3.2, seed + 37 + arena.tx) < th.pools then return LIQUID end
-        return FLOOR
+    if arena then
+        local ad = arenaDist(tx, ty)
+        if ad < arenaOuter() then
+            if ad >= arena.r then return WALL end
+            if arenaSafe(tx, ty) then return FLOOR end
+            local th = arena.th
+            -- Columnas de 2×2 (cobertura) y charcos según el tipo de la arena.
+            if th.pillars and th.pillars > 0 and ad < arena.r - 2
+               and H(floor(tx / 2), floor(ty / 2), seed + 31 + arena.tx) < th.pillars then return WALL end
+            if th.pools and th.pools > 0 and ad < arena.r - 1.5
+               and fbm(tx / 3.2, ty / 3.2, seed + 37 + arena.tx) < th.pools then return LIQUID end
+            return FLOOR
+        end
     end
-    local d = U.hypot(tx, ty)
-    if d < 9 then return FLOOR end                          -- claro inicial
-    local ramp = U.clamp((d - 9) / 8, 0, 1)                 -- aparición suave
+    local d2 = tx * tx + ty * ty
+    if d2 < 81 then return FLOOR end                        -- claro inicial (a menos de 9)
+    local ramp = (sqrt(d2) - 9) / 8                         -- aparición suave (0..1)
+    if ramp > 1 then ramp = 1 end
     if fbm(tx / 13, ty / 13, seed + 101) < 0.04 + 0.23 * ramp then return LIQUID end
     -- (Sin formaciones rocosas en el mapa normal: quedaban como bloques planos.
     -- Los árboles hacen de obstáculo. Las arenas de las grietas sí tienen muro.)
@@ -276,13 +301,14 @@ end
 -- arena) y al pasar de un tope de memoria (todo es recalculable).
 local terrCache, terrN = {}, 0
 local specCache = {}                         -- casillas sin interactivo (specialRaw): true
+local specBlk = {}                           -- interactivos por bloque de 8x8 (ver nearSpecial)
 local function terrainC(tx, ty)
     local k = tx * 1000003 + ty
     local t = terrCache[k]
     if t then return t end
     t = terrainRaw(tx, ty)
     terrN = terrN + 1
-    if terrN > 60000 then terrCache = {}; specCache = {}; terrN = 1 end
+    if terrN > 60000 then terrCache = {}; specCache = {}; specBlk = {}; terrN = 1 end
     terrCache[k] = t
     return t
 end
@@ -339,13 +365,17 @@ local candCache, pieceCache = {}, {}
 local cacheN = 0
 local function clearPieceCache()
     candCache, pieceCache, cacheN = {}, {}, 0
-    terrCache, terrN, specCache = {}, 0, {}
+    terrCache, terrN, specCache, specBlk = {}, 0, {}, {}
 end
 
+-- (En estos bucles se mira la caché directamente y sólo se llama a la función si
+-- falta: en Lua 5.1 interpretado cada llamada cuesta más que la consulta.)
 local function openAt(tx, ty)
     for b = -1, 1 do
+        local y = ty + b
         for a = -1, 1 do
-            if terrainC(tx + a, ty + b) ~= FLOOR then return false end
+            local t = terrCache[(tx + a) * 1000003 + y] or terrainC(tx + a, y)
+            if t ~= FLOOR then return false end
         end
     end
     return true
@@ -357,17 +387,47 @@ local function specialRaw(tx, ty)
     if specCache[k] then return nil end
     local hs = H(tx, ty, seed + 909)
     if hs >= 0.0032 then specCache[k] = true return nil end
-    if U.hypot(tx, ty) <= 12 or arenaDist(tx, ty) < arenaOuter() + 2 then return nil end
-    if terrainC(tx, ty) ~= FLOOR or not openAt(tx, ty) then return nil end
+    if U.hypot(tx, ty) <= 12 or arenaDist(tx, ty) < arenaOuter() + 2
+       or terrainC(tx, ty) ~= FLOOR or not openAt(tx, ty) then
+        specCache[k] = true                     -- (también es puro: se vacía con la arena)
+        return nil
+    end
     local typ = hs < 0.0004 and 'altar' or hs < 0.0008 and 'spring' or hs < 0.0011 and 'bigchest' or 'trap'
     return typ, floor(H(tx, ty, seed + 910) * (typ == 'altar' and 4 or 3))
 end
 
+-- Interactivos por bloques de 8x8 casillas: lista { tx, ty, tx, ty... } o false
+-- (casi siempre). Así "¿hay uno cerca?" mira 1-4 bloques en vez de 8-48 casillas.
+local function specBlock(bx, by)
+    local k = bx * 100003 + by
+    local l = specBlk[k]
+    if l ~= nil then return l end
+    l = false
+    for j = by * 8, by * 8 + 7 do
+        for i = bx * 8, bx * 8 + 7 do
+            if not specCache[i * 1000003 + j] and specialRaw(i, j) then
+                if not l then l = {} end
+                local n = #l
+                l[n + 1] = i; l[n + 2] = j
+            end
+        end
+    end
+    specBlk[k] = l
+    return l
+end
+
 -- ¿Hay un interactivo a `d` casillas o menos (sin contar la propia)?
 local function nearSpecial(tx, ty, d)
-    for b = -d, d do
-        for a = -d, d do
-            if (a ~= 0 or b ~= 0) and specialRaw(tx + a, ty + b) then return true end
+    for by = floor((ty - d) / 8), floor((ty + d) / 8) do
+        for bx = floor((tx - d) / 8), floor((tx + d) / 8) do
+            local l = specBlk[bx * 100003 + by]
+            if l == nil then l = specBlock(bx, by) end
+            if l then
+                for i = 1, #l, 2 do
+                    local sx, sy = l[i], l[i + 1]
+                    if (sx ~= tx or sy ~= ty) and abs(sx - tx) <= d and abs(sy - ty) <= d then return true end
+                end
+            end
         end
     end
     return false
@@ -385,7 +445,7 @@ local function candRaw(tx, ty)
     cacheN = cacheN + 1
     if cacheN > 40000 then clearPieceCache(); cacheN = 1 end
     c = false
-    if U.hypot(tx, ty) >= 7 and terrainC(tx, ty) == FLOOR and openAt(tx, ty) then
+    if tx * tx + ty * ty >= 49 and openAt(tx, ty) then        -- (a 7 casillas o más del centro; openAt mira la propia)
         local typ, kind = nil, 0
         local h = H(tx, ty, seed + 404)
         local ad = arenaDist(tx, ty)
@@ -393,7 +453,7 @@ local function candRaw(tx, ty)
             -- Arenas de la grieta: árboles de su tipo, también al azar y separados.
             if arena and ad < arena.r - 1.2 and not arenaSafe(tx, ty)
                and H(tx, ty, seed + 777) < (arena.th.props.tree or 0) * 6 then typ = 'tree' end
-        else
+        elseif h < 0.36 then                               -- (si no, no hay pieza en ningún caso)
             local gv = groveAt(tx, ty)
             if gv > 0.62 then                              -- bosquecillo
                 if h < 0.30 then typ = 'tree' elseif h < 0.36 then typ, kind = 'deco', 1 end
@@ -414,11 +474,14 @@ end
 
 -- ¿Gana la candidata de (tx, ty) a todas las de 2 casillas a la redonda?
 local function winsAt(tx, ty, c)
+    local pri = c.pri
     for b = -2, 2 do
+        local y = ty + b
         for a = -2, 2 do
             if a ~= 0 or b ~= 0 then
-                local o = candRaw(tx + a, ty + b)
-                if o and o.pri > c.pri then return false end
+                local o = candCache[(tx + a) * 1000003 + y]
+                if o == nil then o = candRaw(tx + a, y) end
+                if o and o.pri > pri then return false end
             end
         end
     end
@@ -451,32 +514,30 @@ end
 -- ¿Hay una pieza en esta casilla o pegada a ella?
 local function nearPiece(tx, ty)
     for b = -1, 1 do
+        local y = ty + b
         for a = -1, 1 do
-            if (a ~= 0 or b ~= 0) and pieceAt(tx + a, ty + b) then return true end
+            if a ~= 0 or b ~= 0 then
+                local r = pieceCache[(tx + a) * 1000003 + y]
+                if r == nil then r = pieceAt(tx + a, y) end
+                if r then return true end
+            end
         end
     end
     return false
 end
 
--- Objetos de la fila j del chunk (se genera por filas: ver chunkData).
-local function placePropsRow(c, j)
+-- Objetos de las casillas i0..i1 de la fila j del chunk (se genera a trozos de
+-- fila: ver genStep). Lo caro (ruido, hashes, "¿hay suelo alrededor?") se calcula
+-- sólo cuando decide algo, en el mismo orden de prioridades de siempre.
+local function placePropsRow(c, j, i0, i1)
     local terr, props, propAt = c.terr, c.props, c.propAt
     do
-        for i = 0, N - 1 do
+        for i = i0, i1 do
             local lidx = j * N + i + 1
             if terr[lidx] == FLOOR then
                 local tx, ty = c.cx * N + i, c.cy * N + j
-                local dist0 = U.hypot(tx, ty)
-                if dist0 >= 7 and not broken[tkey(tx, ty)] then
-                    -- Necesita suelo alrededor para no pegarse a paredes / agua.
-                    local open = true
-                    for b = -1, 1 do
-                        for a = -1, 1 do
-                            if terrainC(tx + a, ty + b) ~= FLOOR then open = false break end
-                        end
-                        if not open then break end
-                    end
-
+                -- (A 7 casillas o más del centro: hypot >= 7 sin raíz.)
+                if tx * tx + ty * ty >= 49 and not broken[tx * 1000003 + ty] then
                     local typ, kind = nil, 0
                     local ad = arenaDist(tx, ty)
                     local piece = pieceAt(tx, ty)
@@ -490,29 +551,39 @@ local function placePropsRow(c, j)
                             local pr = arena.th.props
                             local hh = H(tx, ty, seed + 777)
                             local ptree, prock, pgrass = pr.tree or 0, pr.rock or 0, pr.grass or 0
-                            if open and hh >= ptree and hh < ptree + prock then typ = 'rock'
+                            -- (Las rocas necesitan suelo alrededor: no se pegan a paredes / agua.)
+                            if hh >= ptree and hh < ptree + prock and openAt(tx, ty) then typ = 'rock'
                             elseif hh > 1 - pgrass then typ = 'grass' end
                         end
                     else
-                        local h = H(tx, ty, seed + 404)
-                        local grove = groveAt(tx, ty) > 0.62
-                        local hd = H(tx, ty, seed + 1212)
-                        local sp, sk = specialRaw(tx, ty)
+                        local sp, sk = nil, 0
+                        if not specCache[tx * 1000003 + ty] then sp, sk = specialRaw(tx, ty) end
                         if sp then
                             typ, kind = sp, sk
                         elseif nearSpecial(tx, ty, 1) then
                             typ = nil                     -- alrededor de un interactivo, despejado
-                        elseif open and h > 0.992 then typ = 'rock'
-                        elseif open and h > 0.985 and h <= 0.992 and H(tx, ty, seed + 606) < 0.07 then typ = 'chest'
-                        -- Hierba en montones variados: grandes (ruido ancho), pequeños de
-                        -- 2-5 matas (ruido fino) y matas sueltas.
-                        elseif not grove and fbm(tx / 6, ty / 6, seed + 707) > 0.68 then typ = 'grass'
-                        elseif not grove and fbm(tx / 1.6, ty / 1.6, seed + 717) > 0.74 then typ = 'grass'
-                        -- Flores también en grupos (cada grupo de un color).
-                        elseif not grove and fbm(tx / 2.2, ty / 2.2, seed + 737) > 0.75 then
-                            typ = 'flower'; kind = H(floor(tx / 5), floor(ty / 5), seed + 738) > 0.5 and 1 or 0
-                        elseif not grove and hd < 0.07 then typ = 'tuft'
-                        elseif not grove and hd > 0.993 then typ = 'flower'; kind = hd > 0.9965 and 1 or 0 end
+                        else
+                            local h = H(tx, ty, seed + 404)
+                            -- Rocas y cofres: necesitan suelo alrededor (no pegarse a paredes / agua).
+                            local open = h > 0.985 and openAt(tx, ty)
+                            if open and h > 0.992 then typ = 'rock'
+                            elseif open and h <= 0.992 and H(tx, ty, seed + 606) < 0.07 then typ = 'chest'
+                            elseif groveAt(tx, ty) <= 0.62 then
+                                -- (En el bosquecillo, nada de esto.)
+                                -- Hierba en montones variados: grandes (ruido ancho), pequeños de
+                                -- 2-5 matas (ruido fino) y matas sueltas.
+                                if fbm(tx / 6, ty / 6, seed + 707) > 0.68 then typ = 'grass'
+                                elseif fbm(tx / 1.6, ty / 1.6, seed + 717) > 0.74 then typ = 'grass'
+                                -- Flores también en grupos (cada grupo de un color).
+                                elseif fbm(tx / 2.2, ty / 2.2, seed + 737) > 0.75 then
+                                    typ = 'flower'; kind = H(floor(tx / 5), floor(ty / 5), seed + 738) > 0.5 and 1 or 0
+                                else
+                                    local hd = H(tx, ty, seed + 1212)
+                                    if hd < 0.07 then typ = 'tuft'
+                                    elseif hd > 0.993 then typ = 'flower'; kind = hd > 0.9965 and 1 or 0 end
+                                end
+                            end
+                        end
                     end
 
                     if typ then
@@ -532,19 +603,37 @@ end
 
 local dropBatch                              -- (definida más abajo, en dibujo)
 
--- Un chunk se genera en 2·N pasos: N filas de terreno y luego N filas de objetos
--- (los objetos miran el terreno de las casillas vecinas). Generar uno entero son
--- ~60 ms en la consola: W.update adelanta los de alrededor de la cámara paso a
--- paso, con un tope de tiempo por fotograma (prefetch), y así al llegar ya están.
--- Si alguien pide un chunk que aún no está, se termina en el acto.
-local pend = nil                             -- chunk a medio generar (aún no está en `data`)
+-- Un chunk se genera por pasos: N filas de terreno y luego las de objetos (los
+-- objetos miran el terreno de las casillas vecinas). Generar uno entero son
+-- ~70 ms en la consola (eran ~95 antes de las cachés de ruido): W.update adelanta los de alrededor de la cámara paso a
+-- paso, con el tiempo que le sobra al fotograma (prefetch), y así al llegar ya están.
+--
+-- Nadie más genera trozos enteros de golpe, salvo los de la ZONA DURA (los que se
+-- ven: hay que dibujarlos y ahí está el jugador; si el prefetch va bien ya están
+-- hechos) y en las cargas. Las consultas "de fondo" (colisión de un enemigo lejano, la
+-- rejilla de colisión, los candidatos a dibujar, los interactivos cercanos...)
+-- usan chunkSoft: si el trozo no está, no lo generan:
+--   * el terreno y la tierra son funciones puras (terrainC, dirtRaw): sale igual;
+--   * los objetos no están: "nada sólido, ningún objeto". Lo que se guarda en
+--     caché con esa falta (rejilla de colisión, forma de los árboles) se marca
+--     como parcial y se rehace al terminarse el trozo que faltaba (commitChunk).
+local pending = {}                           -- clave -> chunk a medio generar (aún no está en `data`)
+local nPending = 0
 local prefetchDone = false                   -- todo lo de alrededor de la cámara ya está
+local softMiss = false                       -- una consulta blanda se ha topado con un trozo sin hacer
+-- Zona dura, en trozos (la pone W.update donde mire la cámara: ver setHard).
+local hardX0, hardX1, hardY0, hardY1 = 0, -1, 0, -1
 local function newChunk(cx, cy, k)
     return { cx = cx, cy = cy, key = k, terr = {}, dirt = {}, props = {}, propAt = {}, liquids = {}, trees = {},
              grassAt = {}, step = 0 }
 end
 
--- Un paso de la generación; devuelve true al acabar.
+-- Un paso de la generación; devuelve true al acabar. Pasos: N filas de terreno
+-- (baratas) y luego 4·N cuartos de fila de objetos (lo caro: ~1/70 del trozo cada
+-- uno, ~1 ms en la consola; así el prefetch puede pararse a tiempo sin pasarse
+-- de su tope).
+local PROP_W = 4                             -- casillas de objetos por paso
+local GEN_STEPS = N + N * N / PROP_W
 local function genStep(c)
     local s = c.step
     if s < N then
@@ -554,110 +643,215 @@ local function genStep(c)
         local cx, cy = c.cx, c.cy
         for i = 0, N - 1 do
             local tx, ty = cx * N + i, cy * N + j
-            local t = terrainC(tx, ty)
+            local t = terrCache[tx * 1000003 + ty] or terrainC(tx, ty)
             local idx = j * N + i + 1
             terr[idx] = t
             dirt[idx] = dirtRaw(tx, ty)
             if t == LIQUID then liquids[nl + 1] = tx; liquids[nl + 2] = ty; nl = nl + 2 end
         end
     else
-        placePropsRow(c, s - N)
+        local h = (s - N) * PROP_W                  -- primera casilla del paso (0..N·N-1)
+        local i0 = h % N
+        placePropsRow(c, floor(h / N), i0, i0 + PROP_W - 1)
     end
     c.step = s + 1
-    return c.step >= 2 * N
+    return c.step >= GEN_STEPS
 end
+
+-- Trozos que no se desalojan (alrededor de la cámara: los va a pedir enseguida).
+local keepX0, keepX1, keepY0, keepY1 = 0, -1, 0, -1
 
 -- Mete un chunk terminado en `data` (desalojando el más viejo si hace falta).
 local function commitChunk(c)
     if G_MARKF then G_MARKF("CHUNK") end
     c.step = nil
+    if pending[c.key] then pending[c.key] = nil; nPending = nPending - 1 end
     if #dataOrder >= MAX_DATA then
         if G_MARKF then G_MARKF("DROPCHUNK") end
-        local old = table.remove(dataOrder, 1)
+        -- El más viejo que no esté alrededor de la cámara.
+        local vi = 1
+        for i = 1, #dataOrder do
+            local o = data[dataOrder[i]]
+            if o.cx < keepX0 or o.cx > keepX1 or o.cy < keepY0 or o.cy > keepY1 then vi = i break end
+        end
+        local old = table.remove(dataOrder, vi)
         data[old] = nil
         dropBatch(old)
         prefetchDone = false
     end
     data[c.key] = c
     dataOrder[#dataOrder + 1] = c.key
+    -- Lo que se calculó sin este trozo (parcial) se rehace: la rejilla de colisión
+    -- de los trozos a 2 o menos (mira árboles de sus vecinos, cuyas formas miran
+    -- 5 casillas más allá) y las formas de los árboles de los de al lado.
+    for b = -2, 2 do
+        for a = -2, 2 do
+            local o = data[(c.cx + a) * 100003 + c.cy + b]
+            if o then
+                if o.colPart then o.colBiome = nil end
+                if o.treePart and a >= -1 and a <= 1 and b >= -1 and b <= 1 then
+                    o.treePart = nil
+                    local trees = o.trees
+                    for i = 1, #trees do
+                        if trees[i].shapePart then trees[i].shapeBiome = nil end
+                    end
+                end
+            end
+        end
+    end
     -- Sólo cambia lo visible si el chunk cae en el rectángulo de candidatos.
     local x0, y0 = c.cx * CW, c.cy * CW
     if x0 < candR and x0 + CW > candL and y0 < candB and y0 + CW > candT then propsVer = propsVer + 1 end
 end
 
+-- Trozo entero YA (lo termina en el acto si falta). Sólo para lo que de verdad
+-- lo necesita: dibujar la vista, la zona dura, momentos de carga, depuración.
 local function chunkData(cx, cy)
-    local k = ckey(cx, cy)
+    local k = cx * 100003 + cy
     local c = data[k]
     if c then return c end
-    if pend and pend.key == k then
-        c = pend; pend = nil
-    else
-        c = newChunk(cx, cy, k)
-    end
+    c = pending[k] or newChunk(cx, cy, k)    -- (commitChunk lo quita de pending)
+    if G_MARKF then G_MARKF("GOLPE") end     -- (en el rastro: "GOLPE CHUNK" = generado de golpe)
     while not genStep(c) do end
     commitChunk(c)
     return c
 end
 
--- Adelanta la generación de los chunks alrededor de (x, y) hasta gastar `budget`
--- segundos. Cubre la vista y el anillo donde aparecen los enemigos.
+-- Trozo para una consulta de fondo: nil si aún no está (y no se genera), salvo
+-- en la zona dura. Quien guarde algo calculado con un nil debe mirar softMiss.
+local function chunkSoft(cx, cy)
+    local c = data[cx * 100003 + cy]
+    if c then return c end
+    if cx >= hardX0 and cx <= hardX1 and cy >= hardY0 and cy <= hardY1 then return chunkData(cx, cy) end
+    softMiss = true
+    return nil
+end
+
+-- Adelanta la generación de los chunks alrededor de la cámara (x, y) hasta gastar
+-- `budget` segundos (o `urgent` si lo que falta está a punto de verse). Va primero
+-- lo que antes vaya a entrar en la vista: lo que ya se ve (zona dura), luego lo que
+-- está en la dirección en que se mueve la cámara (vx, vy) y lo más cercano: así va
+-- por delante del jugador. Devuelve el tiempo gastado.
 local prefetch
 do
-local PREFETCH_R = 900
-local pfX, pfY = nil, nil                     -- chunk de la cámara del último barrido completo
+local KEEP_R = 640                            -- alrededor de la cámara y del punto adelantado
+local LOOK, LOOK_MAX = 1.2, 700               -- adelanto: segundos de movimiento (tope en unidades)
+local WALK = 150                              -- velocidad supuesta para "lo cercano" (unidades/s)
+local URGENT_T = 1.2                          -- "a punto de verse": en menos de esto (s)
+local scX0, scX1, scY0, scY1 = 0, -1, 0, -1   -- rectángulo (en trozos) del último barrido completo
+local stepEst = 0.0003                        -- lo que tarda un paso de genStep (s), estimado
 local getTime = love.timer.getTime
-prefetch = function(x, y, budget)
-    if G_FLAGS and G_FLAGS.noprefetch then return end
-    local ccx, ccy = floor(x / CW), floor(y / CW)
-    if prefetchDone and pfX == ccx and pfY == ccy and not pend then return end
-    local t0 = getTime()
-    while true do
-        if not pend then
-            -- El que falte más cerca del centro.
-            local best, bd, bx, by = nil, huge, 0, 0
-            for cy = floor((y - PREFETCH_R) / CW), floor((y + PREFETCH_R) / CW) do
-                for cx = floor((x - PREFETCH_R) / CW), floor((x + PREFETCH_R) / CW) do
-                    local k = cx * 100003 + cy
-                    if not data[k] then
-                        local dx, dy = (cx + 0.5) * CW - x, (cy + 0.5) * CW - y
-                        local d = dx * dx + dy * dy
-                        if d < bd then bd = d; best = k; bx, by = cx, cy end
-                    end
+
+-- El trozo que toca: el que falte que antes vaya a verse (o nil si no falta
+-- ninguno), y en cuántos segundos. Para cada uno: lo que tardaría en entrar en la
+-- vista (vl, vr, vt, vb) con la velocidad de la cámara, o yendo hacia él a WALK si
+-- es menos. Uno a medio hacer cuenta como antes (no se deja a medias sin motivo).
+local function pick(x0, x1, y0, y1, vl, vr, vt, vb, vx, vy)
+    local best, bs, bx, by = nil, huge, 0, 0
+    for cy = y0, y1 do
+        local t, b = cy * CW, cy * CW + CW
+        local gy = max(0, t - vb, vt - b)                -- hueco vertical con la vista
+        local ty = 0
+        if gy > 0 then
+            if t >= vb then ty = vy > 1 and gy / vy or huge else ty = vy < -1 and gy / -vy or huge end
+        end
+        for cx = x0, x1 do
+            local k = cx * 100003 + cy
+            if not data[k] then
+                local l, r = cx * CW, cx * CW + CW
+                local gx = max(0, l - vr, vl - r)
+                local tx = 0
+                if gx > 0 then
+                    if l >= vr then tx = vx > 1 and gx / vx or huge else tx = vx < -1 and gx / -vx or huge end
                 end
+                local s = sqrt(gx * gx + gy * gy) / WALK
+                local sv = max(tx, ty)
+                if sv < s then s = sv end
+                if pending[k] then s = s * 0.7 end
+                if s < bs then bs = s; best = k; bx, by = cx, cy end
             end
-            if not best then
-                prefetchDone, pfX, pfY = true, ccx, ccy
-                return
-            end
-            pend = newChunk(bx, by, best)
-            prefetchDone = false
         end
-        if genStep(pend) then
-            local c = pend
-            pend = nil
-            commitChunk(c)
-        end
-        if getTime() - t0 >= budget then return end
     end
+    return best, bx, by, bs
+end
+
+prefetch = function(x, y, vx, vy, hw, hh, budget, urgent)
+    if G_FLAGS and G_FLAGS.noprefetch then return 0 end
+    -- Punto adelantado.
+    local ax, ay = vx * LOOK, vy * LOOK
+    local al = ax * ax + ay * ay
+    if al > LOOK_MAX * LOOK_MAX then local k = LOOK_MAX / sqrt(al); ax, ay = ax * k, ay * k end
+    local px, py = x + ax, y + ay
+    local x0, x1 = floor((min(x, px) - KEEP_R) / CW), floor((max(x, px) + KEEP_R) / CW)
+    local y0, y1 = floor((min(y, py) - KEEP_R) / CW), floor((max(y, py) + KEEP_R) / CW)
+    keepX0, keepX1, keepY0, keepY1 = x0 - 1, x1 + 1, y0 - 1, y1 + 1
+    if prefetchDone and x0 == scX0 and x1 == scX1 and y0 == scY0 and y1 == scY1 then return 0 end
+    -- Los que se quedaron a medias y ya no hacen falta, fuera (memoria).
+    if nPending > 3 then
+        for k, c in next, pending do
+            if c.cx < x0 or c.cx > x1 or c.cy < y0 or c.cy > y1 then pending[k] = nil; nPending = nPending - 1 end
+        end
+    end
+    local t0 = getTime()
+    local now = t0
+    local cur = nil
+    while true do
+        if not cur then
+            local k, bx, by, s = pick(x0, x1, y0, y1, x - hw, x + hw, y - hh, y + hh, vx, vy)
+            if not k then
+                prefetchDone, scX0, scX1, scY0, scY1 = true, x0, x1, y0, y1
+                break
+            end
+            prefetchDone = false
+            cur = pending[k]
+            if not cur then
+                cur = newChunk(bx, by, k)
+                pending[k] = cur; nPending = nPending + 1
+            end
+            -- ¿A punto de verse? Entonces se le da más tiempo (mejor un fotograma algo
+            -- largo que generarlo de golpe cuando entre en la vista).
+            if s < URGENT_T and urgent > budget then
+                budget = urgent
+            end
+        end
+        if genStep(cur) then
+            commitChunk(cur)
+            cur = nil
+        end
+        local t = getTime()
+        local st = t - now
+        now = t
+        -- Media móvil de lo que tarda un paso: si el siguiente no cabe, se para.
+        -- (Alguno tarda bastante más: una casilla con muchas candidatas alrededor.)
+        stepEst = stepEst + (st - stepEst) * 0.25
+        if now - t0 + stepEst > budget then break end
+    end
+    return now - t0
 end
 
 end -- (prefetch)
 
+-- El terreno y la tierra de una casilla: del trozo si está; si no, se calculan
+-- (son funciones puras: sale lo mismo) sin generar el trozo.
 local function terrainAt(tx, ty)
     local cx, cy = floor(tx / N), floor(ty / N)
-    local c = data[cx * 100003 + cy] or chunkData(cx, cy)
-    return c.terr[(ty - cy * N) * N + (tx - cx * N) + 1]
+    local c = data[cx * 100003 + cy]
+    if c then return c.terr[(ty - cy * N) * N + (tx - cx * N) + 1] end
+    return terrCache[tx * 1000003 + ty] or terrainC(tx, ty)
 end
 
 local function dirtAt(tx, ty)
     local cx, cy = floor(tx / N), floor(ty / N)
-    local c = data[cx * 100003 + cy] or chunkData(cx, cy)
-    return c.dirt[(ty - cy * N) * N + (tx - cx * N) + 1]
+    local c = data[cx * 100003 + cy]
+    if c then return c.dirt[(ty - cy * N) * N + (tx - cx * N) + 1] end
+    return dirtRaw(tx, ty)
 end
 
+-- Objeto sólido de una casilla (consulta blanda: nil si su trozo aún no está).
 local function propAtTile(tx, ty)
     local cx, cy = floor(tx / N), floor(ty / N)
-    local c = data[cx * 100003 + cy] or chunkData(cx, cy)
+    local c = data[cx * 100003 + cy] or chunkSoft(cx, cy)
+    if not c then return nil end
     return c.propAt[(ty - cy * N) * N + (tx - cx * N) + 1]
 end
 
@@ -749,6 +943,7 @@ function W.isFree(x, y, r, allowLiquid)
 end
 
 local function clearList(t) for i = #t, 1, -1 do t[i] = nil end end
+local NO_PROPS = {}                          -- (lista vacía compartida: trozo aún sin generar)
 local flashing = {}                          -- objetos con destello (p.flash > 0), ver W.update
 
 -- Objetos destructibles (incluida la hierba) que tocan un círculo.
@@ -761,7 +956,8 @@ function W.propsInCircle(x, y, r, out)
     local c0y, c1y = floor((y - r) / CW), floor((y + r) / CW)
     for cy = c0y, c1y do
         for cx = c0x, c1x do
-            local props = chunkData(cx, cy).props
+            local c = chunkSoft(cx, cy)
+            local props = c and c.props or NO_PROPS
             for i = 1, #props do
                 local p = props[i]
                 if p.destructible and p.hp > 0 then
@@ -784,7 +980,10 @@ function W.specialsNear(x, y, r, out)
     local c0y, c1y = floor((y - r) / CW), floor((y + r) / CW)
     for cy = c0y, c1y do
         for cx = c0x, c1x do
-            local props = chunkData(cx, cy).props
+            -- (Sólo lo ya generado, ni siquiera la zona dura: con radio 720 llega fuera
+            -- de la vista, y lo que aún no está no puede tener nada activo.)
+            local c = data[cx * 100003 + cy]
+            local props = c and c.props or NO_PROPS
             for i = 1, #props do
                 local p = props[i]
                 if SPECIAL[p.type] then
@@ -885,11 +1084,19 @@ local MIN_GAP = 72
 
 -- Cajas sólidas de un árbol: la suya y los puentes hacia los árboles vecinos con
 -- los que deja una rendija < MIN_GAP. Devuelve (lista, caja que lo abarca todo).
+-- Si algún trozo vecino aún no está, la forma queda PARCIAL (sin los puentes hacia
+-- sus árboles): p.shapePart, y su trozo treePart; commitChunk la tira al terminar
+-- el vecino. Mientras, quien la use se entera por softMiss.
 local function treeShape(p)
-    if p.shapeBiome == biome then return p.shape, p.shapeExt end
-    p.shapeBiome, p.shape, p.shapeExt = biome, nil, nil
+    if p.shapeBiome == biome then
+        if p.shapePart then softMiss = true end
+        return p.shape, p.shapeExt
+    end
+    p.shapeBiome, p.shape, p.shapeExt, p.shapePart = biome, nil, nil, nil
     local pb = treeBox(p)
     if not pb then return nil end
+    local outer = softMiss
+    softMiss = false
     local list = { pb }
     local ext = { pb[1], pb[2], pb[3], pb[4] }
     for b = -5, 5 do
@@ -917,6 +1124,12 @@ local function treeShape(p)
         end
     end
     p.shape, p.shapeExt = list, ext
+    if softMiss then
+        p.shapePart = true
+        local o = data[ckey(floor(p.tx / N), floor(p.ty / N))]
+        if o then o.treePart = true end
+    end
+    softMiss = outer or softMiss
     return list, ext
 end
 
@@ -952,15 +1165,25 @@ local function colMark(grid, c, x0, y0, x1, y1)
         for i = i0, i1 do grid[j * COLN + i + 1] = true end
     end
 end
+-- Con algún vecino sin generar (consulta blanda: no se generan aquí; antes un
+-- enemigo lejano que chocaba generaba vecinos en cascada), la rejilla queda
+-- PARCIAL (c.colPart: sin sus objetos) y commitChunk la tira al terminar el vecino.
+-- El terreno sí sale entero (terrainAt no necesita el trozo).
 local function colGrid(c)
     if c.colBiome == biome then return c end
+    softMiss = false
     local solid, liq = {}, {}
     -- Paredes y líquido del chunk y de una franja de los vecinos (lo que queda a
     -- menos de COL_M del borde).
     local B = floor(COL_M / TS) + 1
-    for ty = c.cy * N - B, c.cy * N + N - 1 + B do
-        for tx = c.cx * N - B, c.cx * N + N - 1 + B do
-            local t = terrainAt(tx, ty)
+    local terr = c.terr
+    local bx0, by0 = c.cx * N, c.cy * N
+    for ty = by0 - B, by0 + N - 1 + B do
+        local inY = ty >= by0 and ty < by0 + N
+        for tx = bx0 - B, bx0 + N - 1 + B do
+            local t
+            if inY and tx >= bx0 and tx < bx0 + N then t = terr[(ty - by0) * N + (tx - bx0) + 1]
+            else t = terrainAt(tx, ty) end
             if t ~= FLOOR then
                 local x0, y0 = tx * TS, ty * TS
                 colMark(t == WALL and solid or liq, c, x0, y0, x0 + TS, y0 + TS)
@@ -971,8 +1194,8 @@ local function colGrid(c)
     -- pueden asomar a éste (las copas, sobre todo).
     for b = -1, 1 do
         for a = -1, 1 do
-            local o = chunkData(c.cx + a, c.cy + b)
-            local props = o.props
+            local o = chunkSoft(c.cx + a, c.cy + b)
+            local props = o and o.props or NO_PROPS
             for k = 1, #props do
                 local p = props[k]
                 if p.solid then
@@ -989,6 +1212,8 @@ local function colGrid(c)
         end
     end
     c.colSolid, c.colLiq, c.colBiome = solid, liq, biome
+    c.colPart = softMiss or nil
+    softMiss = false
     return c
 end
 
@@ -1000,10 +1225,14 @@ function W.collide(e)
     if r <= COL_MAXR then
         local x, y = e.x, e.y
         local cx, cy = floor(x / CW), floor(y / CW)
-        local c = data[cx * 100003 + cy] or chunkData(cx, cy)
-        if c.colBiome ~= biome then colGrid(c) end
-        local cell = floor((y - cy * CW) / COLC) * COLN + floor((x - cx * CW) / COLC) + 1
-        if not c.colSolid[cell] and not (c.colLiq[cell] and W.liquidSolidFor(e)) then return false end
+        -- (Consultas blandas: un enemigo lejano en un trozo sin generar choca sólo
+        -- con el terreno hasta que el prefetch lo haga. El jugador está en la zona dura.)
+        local c = data[cx * 100003 + cy] or chunkSoft(cx, cy)
+        if c then
+            if c.colBiome ~= biome then colGrid(c) end
+            local cell = floor((y - cy * CW) / COLC) * COLN + floor((x - cx * CW) / COLC) + 1
+            if not c.colSolid[cell] and not (c.colLiq[cell] and W.liquidSolidFor(e)) then return false end
+        end
     end
     -- La lava (mar de lava) no se pisa salvo los de tipo Fuego, y éstos no pisan
     -- el agua: para quien no puede, el líquido cuenta como pared.
@@ -1019,12 +1248,12 @@ function W.collide(e)
         local qx0, qx1, qy0, qy1 = e.x - r - 160, e.x + r + 160, e.y - r - 160, e.y + r + 200
         for cy = floor(qy0 / (N * TS)), floor(qy1 / (N * TS)) do
             for cx = floor(qx0 / (N * TS)), floor(qx1 / (N * TS)) do
-                local c = data[cx * 100003 + cy] or chunkData(cx, cy)
-                local trees = c.trees
+                local c = data[cx * 100003 + cy] or chunkSoft(cx, cy)
+                local trees = c and c.trees or NO_PROPS
                 for k = 1, #trees do
                     local tp = trees[k]
                     local boxes, ext
-                    if tp.shapeBiome == biome then boxes, ext = tp.shape, tp.shapeExt
+                    if tp.shapeBiome == biome and not tp.shapePart then boxes, ext = tp.shape, tp.shapeExt
                     else boxes, ext = treeShape(tp) end
                     if boxes and e.x + r > ext[1] and e.x - r < ext[3] and e.y + r > ext[2] and e.y - r < ext[4] then
                         for b = 1, #boxes do
@@ -1043,9 +1272,10 @@ function W.collide(e)
             for tx = t0x, t1x do
                 local cx = floor(tx / N)
                 local k = cx * 100003 + cy
-                if k ~= lk then lk = k; lc = data[k] or chunkData(cx, cy) end
+                if k ~= lk then lk = k; lc = data[k] or chunkSoft(cx, cy) end
                 local idx = (ty - cy * N) * N + (tx - cx * N) + 1
-                local tt = lc.terr[idx]
+                local tt
+                if lc then tt = lc.terr[idx] else tt = terrCache[tx * 1000003 + ty] or terrainC(tx, ty) end
                 if (tt == WALL or (lavaSolid and tt == LIQUID)) and abs(tx * TS + TS / 2 - e.x) < r + TS and abs(ty * TS + TS / 2 - e.y) < r + TS then
                     -- Punto más cercano de la caja del tile al centro del círculo.
                     local bx0, by0 = tx * TS, ty * TS
@@ -1069,7 +1299,7 @@ function W.collide(e)
                         end
                     end
                 end
-                local p = lc.propAt[idx]
+                local p = lc and lc.propAt[idx]
                 if p and p.solid and (p.type ~= 'tree' or not treeBox(p)) then
                     local dx, dy = e.x - p.x, e.y - p.y
                     local mn = r + p.r
@@ -1092,6 +1322,10 @@ end -- (colisión)
 -- Depuración (`--treetest`): empuja un círculo contra el primer árbol con caja desde
 -- abajo, arriba y la izquierda, y devuelve dónde se queda frente a la caja.
 function W.debugTreeTest(r)
+    -- (Los trozos de la zona, ya: las consultas de colisión no los generan.)
+    for cy = -4, 3 do
+        for cx = -4, 3 do chunkData(cx, cy) end
+    end
     for ty = -40, 40 do
         for tx = -40, 40 do
             local p = propAtTile(tx, ty)
@@ -1226,7 +1460,8 @@ function W.breakAt(tx, ty)
     end
     if found then destroyProp(found) else broken[k] = true end
     -- Si su chunk está a medio generar, se rehace (puede haber colocado ya el objeto).
-    if pend and pend.key == ckey(floor(tx / N), floor(ty / N)) then pend = nil end
+    local pk = ckey(floor(tx / N), floor(ty / N))
+    if pending[pk] then pending[pk] = nil; nPending = nPending - 1 end
 end
 
 function W.breakProp(p)
@@ -1660,7 +1895,8 @@ function W.visibleProps(cam)
     local y0, y1 = floor((t - padTop) / CW), floor((b + padBot) / CW)
     for cy = y0, y1 do
         for cx = x0, x1 do
-            local props = chunkData(cx, cy).props
+            local c = chunkSoft(cx, cy)
+            local props = c and c.props or NO_PROPS
             for i = 1, #props do
                 local p = props[i]
                 if p.x > l - padX and p.x < r + padX and p.y > t - padTop and p.y < b + padBot then
@@ -1778,10 +2014,10 @@ function W.rustle(x, y, dt)
     for j = -1, 1 do
         for i = -1, 1 do
             local cx, cy = floor((tx + i) / N), floor((ty + j) / N)
-            local c = chunkData(cx, cy)
+            local c = chunkSoft(cx, cy)
             -- (Una mata como mucho por casilla: se mira directamente, sin recorrer
             -- todos los objetos del chunk 9 veces.)
-            local p = c.grassAt[(ty + j - cy * N) * N + (tx + i - cx * N) + 1]
+            local p = c and c.grassAt[(ty + j - cy * N) * N + (tx + i - cx * N) + 1]
             if p then
                 if i == 0 and j == 0 then
                     if (p.rustle or 0) <= 0.05 and G.FX and G.FX.burst then
@@ -1998,7 +2234,10 @@ local function rebuildCandidates(l, t, r, b)
     local nf, ns = 0, 0
     for cy = floor(candT / CW), floor(candB / CW) do
         for cx = floor(candL / CW), floor(candR / CW) do
-            local props = chunkData(cx, cy).props
+            -- (Consulta blanda: el rectángulo es mayor que la vista. Si un trozo aún no
+            -- está, sus objetos entran al terminarse: commitChunk sube propsVer.)
+            local c = chunkSoft(cx, cy)
+            local props = c and c.props or NO_PROPS
             for i = 1, #props do
                 local p = props[i]
                 local x, y = p.x, p.y
@@ -2119,8 +2358,33 @@ function W.drawVignette(w, h)
     lg.setColor(1, 1, 1, 1)
 end
 
--- Tope de tiempo por fotograma para adelantar chunks (segundos).
-local PREFETCH_BUDGET = 0.003
+-- Zona dura: los trozos que se ven (con un pelo de margen por la sacudida de la
+-- cámara). drawGround los necesita igual; con un margen mayor entraban antes en la
+-- zona y había que generarlos de golpe con el prefetch aún en camino. (Lo de los
+-- márgenes, como la copa de un árbol cuyo pie queda bajo la vista, aparece en
+-- cuanto el prefetch, que da prioridad a lo que está a punto de verse, lo termina.)
+local function setHard(cam)
+    local l, t = cam.x - cam.w / 2, cam.y - cam.h / 2
+    hardX0, hardX1 = floor((l - 16) / CW), floor((l + cam.w + 16) / CW)
+    hardY0, hardY1 = floor((t - 16) / CW), floor((t + cam.h + 16) / CW)
+end
+
+-- Tiempo por fotograma para adelantar chunks: lo que le sobra al fotograma. La
+-- consola va a 30 fps fijos (33 ms); el fotograma (lógica + las dos pantallas, sin
+-- el propio prefetch) se mide con PERF (main.lua) y se estima con prudencia:
+-- sube en el acto y baja despacio (un pico suele repetirse).
+local FRAME_T = 0.030                        -- (33 ms con algo de margen)
+local MIN_BUDGET, MAX_BUDGET = 0.002, 0.014  -- (siempre algo; nunca demasiado, ni en el PC)
+-- Si lo que falta está a punto de verse: mejor algún fotograma algo largo que un
+-- trozo de golpe.
+local URGENT_BUDGET = 0.012
+-- Justo tras una carga (nueva partida, menú, grieta) sólo están los trozos de la
+-- vista y el jugador ya anda: unos segundos con más tiempo para el anillo de
+-- alrededor (el juego va un poco más lento, a ~20 fps, en vez de dar tirones).
+local WARM_TIME, WARM_BUDGET = 3, 0.025
+local warmT = 0
+local workEst, lastWork, lastSpent = 0.025, nil, 0
+local camPX, camPY, camVX, camVY = nil, nil, 0, 0
 function W.update(dt, cam)
     cam = cam or G.Camera
     -- Destello de los objetos golpeados: sólo los de la lista (antes se recorrían
@@ -2133,7 +2397,30 @@ function W.update(dt, cam)
             flashing[i] = flashing[#flashing]; flashing[#flashing] = nil
         end
     end
-    prefetch(cam.x, cam.y, PREFETCH_BUDGET)
+    setHard(cam)
+    -- Velocidad de la cámara (suavizada), para adelantarse en su dirección.
+    if camPX and dt > 0 then
+        local ivx, ivy = (cam.x - camPX) / dt, (cam.y - camPY) / dt
+        if ivx * ivx + ivy * ivy > 2000 * 2000 then ivx, ivy = 0, 0 end     -- (un salto: grieta, nueva partida)
+        camVX = camVX + (ivx - camVX) * 0.2
+        camVY = camVY + (ivy - camVY) * 0.2
+    end
+    camPX, camPY = cam.x, cam.y
+    -- Lo que costó el fotograma anterior sin el prefetch (PERF se pone a 0 cada 30 s:
+    -- entonces se sigue con la estimación que había).
+    local P = PERF
+    if P then
+        local w = P.upd + P.top + P.bot
+        if lastWork and w >= lastWork then
+            local f = w - lastWork - lastSpent
+            workEst = max(f, workEst - 0.0005)
+        end
+        lastWork = w
+    end
+    local budget = min(MAX_BUDGET, max(MIN_BUDGET, FRAME_T - workEst))
+    local urgent = URGENT_BUDGET
+    if warmT > 0 then warmT = warmT - dt; urgent = WARM_BUDGET end
+    lastSpent = prefetch(cam.x, cam.y, camVX, camVY, cam.w / 2, cam.h / 2, budget, urgent)
 end
 
 -- ---------------- control ----------------
@@ -2146,8 +2433,12 @@ function W.reset(s)
     for k in pairs(broken) do broken[k] = nil end
     arena = nil
     clearPieceCache()
-    nmx, nmy, nma, nmb, nmc, nmd = {}, {}, {}, {}, {}, {}   -- (una entrada por semilla)
-    pend, prefetchDone = nil, false
+    latC, latN = {}, 0                           -- (esquinas del ruido: dependen de la semilla)
+    pending, nPending, prefetchDone = {}, 0, false
+    -- Sin zona dura hasta el próximo W.update (que la pone donde esté la cámara).
+    hardX0, hardX1, hardY0, hardY1 = 0, -1, 0, -1
+    camPX, camVX, camVY = nil, 0, 0
+    warmT = WARM_TIME
     propsVer = propsVer + 1
     clearList(flashing)
     invalidateBatches()
@@ -2173,7 +2464,8 @@ function W.setArena(a)
     arena = a
     invalidateBatches()
     clearPieceCache()
-    pend, prefetchDone = nil, false              -- (el terreno de la zona cambia)
+    pending, nPending, prefetchDone = {}, 0, false   -- (el terreno de la zona cambia)
+    warmT = WARM_TIME                            -- (se entra o se sale de un salto: ver W.update)
     propsVer = propsVer + 1
     if not a then return end
     a.th = ARENA_THEMES[a.type] or ARENA_THEMES.normal
