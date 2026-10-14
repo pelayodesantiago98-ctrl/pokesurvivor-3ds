@@ -130,7 +130,7 @@ function S.update(dt, pl, t)
     preloadT = preloadT - dt
     if preloadT <= 0 then
         preloadT = 10
-        G.Sprites.preload(stage and G.Stages.upcomingDex(t, 60) or G.Enemies.upcomingDex(t, 60), false)
+        G.Sprites.preloadSoon(stage and G.Stages.upcomingDex(t, 60) or G.Enemies.upcomingDex(t, 60), false)
     end
     gcT = gcT - dt
     if gcT <= 0 then gcT = 10; gcSprites(pl, t) end

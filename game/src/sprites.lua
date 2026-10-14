@@ -112,19 +112,20 @@ local function loadSheet(dex, full, shiny)
     -- caja opaca: ox/oy corrigen el ancla.
     local anims = {}
     for name, a in pairs(set.anims) do
-        local quads, ox, oy = {}, {}, {}
+        local quads, ox, oy, qw = {}, {}, {}, {}
         local n = a.n
         for row = 0, a.rows - 1 do
             for i = 0, n - 1 do
                 local idx = row * n + i
                 local k = idx * 6
                 quads[idx + 1] = lg.newQuad(a.q[k + 1], a.q[k + 2], a.q[k + 3], a.q[k + 4], set.w, set.h)
+                qw[idx + 1] = a.q[k + 3]
                 ox[idx + 1] = a.q[k + 5]
                 oy[idx + 1] = a.q[k + 6]
             end
         end
         anims[name] = { w = a.w, h = a.h, n = n, rows = a.rows, ax = a.ax, ay = a.ay, d = a.d,
-                        quads = quads, ox = ox, oy = oy }
+                        quads = quads, ox = ox, oy = oy, qw = qw }
     end
     sh = { img = img, anims = anims, full = full and d.full ~= nil, used = getTime() }
     sheets[key] = sh
@@ -156,6 +157,24 @@ end
 -- Carga ya las hojas (para que no se cargue en mitad de un fotograma).
 function S.preload(dexes, full, shiny)
     for i = 1, #dexes do loadSheet(dexes[i], full, shiny) end
+end
+
+-- Igual, pero poco a poco: una hoja por fotograma (S.step). En la 3DS cada hoja
+-- tarda ~40 ms en cargarse; cargar las de todo el minuto siguiente de golpe daba
+-- tirones de medio segundo en mitad de la partida.
+local queue = {}
+function S.preloadSoon(dexes, full, shiny)
+    for i = 1, #dexes do
+        local d = dexes[i]
+        if not sheets[sheetKey(d, full, shiny)] then queue[#queue + 1] = { d, full, shiny } end
+    end
+end
+function S.step()
+    local q = table.remove(queue, 1)
+    if q then loadSheet(q[1], q[2], q[3]) end
+end
+function S.clearQueue()
+    for i = #queue, 1, -1 do queue[i] = nil end
 end
 
 -- Descarga las hojas que no estén en keep ({dex=true} o lista). Las "full" se
@@ -313,7 +332,6 @@ function Animator:draw(x, y, opts)
         lg.setColor(1, 1, 1, 1)
         return
     end
-    sh.used = U.now()
     local dir = self.dir
     local row = ROW[dir] or 0
     if row > a.rows - 1 then row = a.rows - 1 end
@@ -324,7 +342,7 @@ function Animator:draw(x, y, opts)
     local ax, ay = a.ax - a.ox[idx], a.ay - a.oy[idx]
     -- Las anclas de SpriteCollab son medias (15,5): se redondea la esquina del
     -- dibujo a píxel entero para que no se cuelen texels de los fotogramas vecinos.
-    local _, _, qw = quad:getViewport()
+    local qw = a.qw[idx]
     local px, py
     if FLIP[dir] then
         px = U.snap(x - (qw - ax) * k) + qw * k
@@ -364,7 +382,7 @@ function S.drawStill(dex, x, y, scale, anim, frame, dir, shiny)
     local f = math.min(frame or 0, a.n - 1)
     local idx = row * a.n + f + 1
     local ax, ay = a.ax - a.ox[idx], a.ay - a.oy[idx]
-    local _, _, qw = a.quads[idx]:getViewport()
+    local qw = a.qw[idx]
     local flip = FLIP[dir or 0]
     local px = flip and (U.round(x - (qw - ax) * k) + qw * k) or U.round(x - ax * k)
     lg.draw(sh.img, a.quads[idx], px, U.round(y - ay * k), 0, flip and -k or k, k)

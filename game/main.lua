@@ -26,6 +26,7 @@ local startTime = nil        -- `--time=N`: reloj de la run al empezar
 for _, a in ipairs(arg or {}) do
     local tm = a:match("^%-%-time=(%d+)$")
     if tm then startTime = tonumber(tm) end
+    if a == "--nohudcv" then G_NO_HUD_CANVAS = true end   -- HUD de abajo sin imagen guardada (comparar)
     if a == "--steps" then G_PRINT_STEPS = true; io.stdout:setvbuf("no") end   -- imprime los pasos G_STEP (el rastro de la 3DS)
 end
 -- Traza a fichero (solo en modo smoke): si el proceso se cuelga, dice hasta dónde llegó.
@@ -459,6 +460,12 @@ for _, a in ipairs(arg or {}) do
     local s = a:match("^%-%-shot=(%d+)$")
     if s then shotAt = tonumber(s) end
 end
+-- `--shotname=x`: shot-x.png (varias capturas a la vez sin pisarse).
+local shotName = "shot.png"
+for _, a in ipairs(arg or {}) do
+    local n = a:match("^%-%-shotname=([%w_%-]+)$")
+    if n then shotName = "shot-" .. n .. ".png" end
+end
 local vertLogT = 0
 -- Tiempos medidos en la consola (ms acumulados en la ventana de 10 s).
 PERF = { upd = 0, top = 0, bot = 0, n = 0, worst = 0 }
@@ -486,7 +493,7 @@ function love.update(dt)
         shotT = shotT + dt
         if shotT >= shotAt and shotAt > 0 then
             shotAt = -1
-            love.graphics.captureScreenshot("shot.png")
+            love.graphics.captureScreenshot(shotName)
         elseif shotAt == -1 and shotT >= 0 then
             shotAt = -2; shotT = -0.5
         elseif shotAt == -2 and shotT >= 0 then
@@ -505,7 +512,8 @@ function love.update(dt)
         end
         G.Game.autoplay(dt)
     end
-    if G_PROF and G.Game.state() == "playing" then
+    -- `--profany`: mide también fuera de la partida (menús con --ui=<pantalla>).
+    if G_PROF and (G_PROF.any or G.Game.state() == "playing") then
         if not G_PROF.on then
             G_PROF.on = true; G_PROF.t = 0
             G_PROF.install()
@@ -728,6 +736,7 @@ for _, a in ipairs(arg or {}) do
         for _, b in ipairs(arg) do
             local s = b:match("^%-%-profsecs=(%d+)$")
             if s then G_PROF.secs = tonumber(s) end
+            if b == "--profany" then G_PROF.any = true end
         end
         local function wrapTable(name, t, seen)
             if type(t) ~= "table" or seen[t] then return end

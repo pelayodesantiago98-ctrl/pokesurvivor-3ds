@@ -82,9 +82,18 @@ local function battleBox(pl, x, y, w)
     return y + h + 12
 end
 
-function hud.draw()
-    local pl = G.Game.player()
-    if not pl then return end
+-- Geometría de los botones de movimiento y de la fila inferior (dibujo y zonas táctiles).
+local MV_TOP, MV_W, MV_H = 86, 148, 58
+local function slotXY(i)
+    local col_i, row = (i - 1) % 2, math.floor((i - 1) / 2)
+    return 8 + col_i * (MV_W + 8), MV_TOP + 6 + row * (MV_H + 4)
+end
+local BURST_X, BURST_W, PAUSE_X = 152, 94, W - 66
+
+-- HUD completo. `live` = false cuando se pinta en la imagen guardada: entonces no
+-- lleva lo que se mueve cada fotograma (marco del activo, velo de recarga, latido
+-- del Burst), que hud.draw pone encima.
+local function drawHud(pl, live)
     R.platinumBackground(0)
     local y0 = battleBox(pl, 8, 6, 304)
 
@@ -110,15 +119,13 @@ function hud.draw()
     -- color del tipo, nombre arriba, etiqueta del tipo abajo a la izquierda y, en vez
     -- de los PP, los puntos de nivel. El activo lleva el cursor de esquinas rojas.
     -- (Más juntos en vertical para dejar aire al botón de pausa de abajo.)
-    local top = 86
-    local BW, BH = 148, 58
     for i = 1, 4 do
-        local col_i, row = (i - 1) % 2, math.floor((i - 1) / 2)
-        local x, y = 8 + col_i * (BW + 8), top + 6 + row * (BH + 4)
+        local x, y = slotXY(i)
         local g = pl.slots[i]
         local m = g and g[1]
-        R.moveButton(x, y, BW, BH, m, g and #g > 1 and #g or nil, i == pl.active and m ~= nil, m and cdOf(m, pl) or 0)
-        if m then UI.hitbox("slot" .. i, x, y, BW, BH) end
+        R.moveButton(x, y, MV_W, MV_H, m, g and #g > 1 and #g or nil, live and i == pl.active and m ~= nil,
+                     live and m and cdOf(m, pl) or 0)
+        if m then UI.hitbox("slot" .. i, x, y, MV_W, MV_H) end
     end
     lg.setColor(1, 1, 1, 1)
 
@@ -135,13 +142,15 @@ function hud.draw()
         UI.text("x" .. pl.bonds, 133, by + 3, { size = 10, color = UI.C.pink })
     end
     -- Ataque Burst: barra que se carga; llena, botón que late (X en el mando).
-    local bx, bw = 152, 94
+    local bx, bw = BURST_X, BURST_W
     local col = U.TYPE_COLOR[pl.mon.types[1]] or "#ffd23f"
     if G.Burst.ready(pl) then
         UI.button("burst", bx, by, bw, 18, "¡BURST!", { size = 10, color = col })
-        U.setColor("#ffffff", 0.25 + 0.25 * math.sin(U.now() * 8))
-        lg.rectangle("fill", bx + 2, by + 2, bw - 4, 14, 5, 5)
-        lg.setColor(1, 1, 1, 1)
+        if live then
+            U.setColor("#ffffff", 0.25 + 0.25 * math.sin(U.now() * 8))
+            lg.rectangle("fill", bx + 2, by + 2, bw - 4, 14, 5, 5)
+            lg.setColor(1, 1, 1, 1)
+        end
     else
         U.setColor("#2a2440")
         lg.rectangle("fill", bx, by + 1, bw, 16, 5, 5)
@@ -150,8 +159,94 @@ function hud.draw()
         G.PixelFont.print("BURST " .. math.floor((pl.burst or 0) * 100) .. "%", bx + 8, by + 6,
                           { s = 1, color = "#ffffff", shadow = "#2a2440" })
     end
-    UI.button("pause", W - 66, by, 58, 18, "Pausa", { size = 10, color = "#4a4468" })
+    UI.button("pause", PAUSE_X, by, 58, 18, "Pausa", { size = 10, color = "#4a4468" })
 end
+
+-- La pantalla de abajo casi no cambia de un fotograma a otro, pero son ~300 piezas
+-- (en la 3DS, 10-16 ms por fotograma). Se pinta en una imagen y sólo se repinta
+-- cuando cambia algo de lo que muestra (firma); lo animado va encima en directo.
+local hudCv, hudCvTried, hudSig = nil, false, nil
+local sigParts = {}
+local function hudSignature(pl)
+    local p, n = sigParts, 0
+    local function add(v) n = n + 1; p[n] = v end
+    add(pl.mon.name); add(pl.level); add(pl.shiny and 1 or 0)
+    add(math.ceil(pl.hp)); add(U.round(pl.maxHp))
+    add(math.floor(U.clamp(pl.xp / pl.xpNext, 0, 1) * 256))
+    for _, k in ipairs({ "atk", "spd", "def", "regen" }) do local b = pl.buffs[k]; add(b and b.n or 0) end
+    add(pl.power and (pl.power.def.name or "?") or ""); add(pl.power and math.ceil(pl.power.t) or 0)
+    add(math.floor(G.Game.time())); add(pl.kills); add(pl.bosses); add(pl.coins)
+    for i = 1, 4 do
+        local g = pl.slots[i]
+        local m = g and g[1]
+        if m then add(m.name); add(#g); add(m.type); add(m.lvl); add(m.evolved and 1 or 0)
+        else add("-") end
+    end
+    add(pl.item or ""); add(pl.bonds)
+    add(G.Burst.ready(pl) and -1 or math.floor((pl.burst or 0) * 100))
+    for i = n + 1, #p do p[i] = nil end
+    return table.concat(p, "|")
+end
+
+function hud.draw()
+    local pl = G.Game.player()
+    if not pl then return end
+    if not hudCvTried then
+        hudCvTried = true
+        if G_STEP then G_STEP("hud: creando imagen") end
+        local ok, cv = false, nil
+        if not G_NO_HUD_CANVAS then ok, cv = pcall(lg.newCanvas, W, H) end
+        if ok and cv then hudCv = cv end
+        if G_STEP then G_STEP("hud: imagen " .. (hudCv and "ok" or "no disponible")) end
+    end
+    if not hudCv then drawHud(pl, true) return end
+
+    local sig = hudSignature(pl)
+    if sig ~= hudSig then
+        hudSig = sig
+        lg.push()
+        lg.origin()
+        lg.setCanvas(hudCv)
+        lg.clear(0, 0, 0, 1)
+        drawHud(pl, false)
+        lg.setCanvas()
+        lg.pop()
+    end
+    lg.setColor(1, 1, 1, 1)
+    lg.draw(hudCv, 0, 0)
+
+    -- Zonas táctiles (se borran en cada fotograma) y lo animado.
+    local by = H - 20
+    for i = 1, 4 do
+        local x, y = slotXY(i)
+        local g = pl.slots[i]
+        local m = g and g[1]
+        if m then
+            UI.hitbox("slot" .. i, x, y, MV_W, MV_H)
+            R.moveVeil(x, y, MV_W, MV_H, cdOf(m, pl))
+            if i == pl.active then UI.selectFrame(x, y, MV_W, MV_H) end
+        end
+    end
+    if G.Burst.ready(pl) then
+        UI.hitbox("burst", BURST_X, by, BURST_W, 18)
+        U.setColor("#ffffff", 0.25 + 0.25 * math.sin(U.now() * 8))
+        lg.rectangle("fill", BURST_X + 2, by + 2, BURST_W - 4, 14, 5, 5)
+    end
+    UI.hitbox("pause", PAUSE_X, by, 58, 18)
+    lg.setColor(1, 1, 1, 1)
+end
+
+-- Velo de recarga sobre la cara del botón (de abajo arriba). La cara empieza bajo
+-- las 7 filas de la tapa (ver R.moveButton).
+function R.moveVeil(x, y, w, h, cd)
+    if not cd or cd <= 0.05 then return end
+    local fx, fy, fw, fh = x + 10, y + 8, w - 20, h - 14
+    lg.setColor(0, 0, 0, 0.12)
+    lg.rectangle("fill", fx, fy + fh * (1 - cd), fw, fh * cd)
+end
+
+-- Al empezar otra partida (o volver al HUD) se repinta seguro.
+function hud.enter() hudSig = nil end
 
 -- ---------------- estilo Platino ----------------
 

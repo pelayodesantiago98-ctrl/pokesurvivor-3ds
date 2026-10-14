@@ -65,6 +65,7 @@ function Game.startRun(stageIdx)
     G.Weather.reset()
     G.Path.clear()
     G.Hazards.clear(); G.Interact.clear()
+    G.Sprites.clearQueue()
     G.Sprites.gc({})
     G.World.reset(math.floor(love.math.random() * 1e6))
     biome = stage and stage.biome or 0
@@ -481,6 +482,7 @@ function Game.frame(dt)
             G.DB.commit()
         end
     end
+    if state == "playing" then G.Sprites.step() end
     if state == "playing" then update(dt)
     elseif pl and state ~= "ui" then
         G.FX.update(dt * 0.25)
@@ -493,6 +495,7 @@ end
 -- ---------------- dibujo (pantalla superior) ----------------
 
 local items = {}      -- lista reutilizada para ordenar por Y
+local function byY(a, b) return a.y < b.y end
 local reflOpts = { reflect = true }
 
 local function drawScene(cam, extra)
@@ -505,15 +508,22 @@ local function drawScene(cam, extra)
     G.Combat.drawGroundFields()
     G.Pickups.draw()
 
+    -- Lo plano, las flores y las matitas de hierba van pegados al suelo: siempre por
+    -- debajo de quien los pisa, así que se dibujan ya y no entran en la ordenación
+    -- (son la mayoría de los objetos a la vista).
     -- Todo lo que tiene "pies" se ordena por Y: objetos, enemigos, jugador.
     local n = 0
     for i = 1, #props do
         local p = props[i]
-        n = n + 1
-        local it = items[n] or {}
-        -- Lo plano y las flores van pegados al suelo: siempre por debajo de quien los pisa.
-        it.y = (p.flat or p.type == 'flower') and (p.y - 4000) or G.World.propSortY(p); it.prop = p; it.ent = nil
-        items[n] = it
+        local ty = p.type
+        if p.flat or ty == 'flower' or ty == 'tuft' then
+            G.World.drawProp(p, t)
+        else
+            n = n + 1
+            local it = items[n] or {}
+            it.y = G.World.propSortY(p); it.prop = p; it.ent = nil
+            items[n] = it
+        end
     end
     local ds = G.EnemyMgr.drawables(cam)
     for i = 1, #ds do
@@ -552,7 +562,7 @@ local function drawScene(cam, extra)
         end
     end
     for i = #items, n + 1, -1 do items[i] = nil end
-    table.sort(items, function(a, b) return a.y < b.y end)
+    table.sort(items, byY)
     -- Reflejos en el agua (debajo de todo): quien pisa agua con agua también debajo.
     if G.World.reflects() then
         for i = 1, n do

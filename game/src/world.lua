@@ -1537,12 +1537,17 @@ function W.rustle(x, y, dt)
     end
 end
 
--- Dibuja un objeto de decoración anclado por el pie (centro-inferior).
+-- Dibuja un objeto de decoración anclado por el pie (centro-inferior). La posición en
+-- pantalla y si lleva sombra se calculan una vez por objeto (no se mueven).
 local function drawDeco(entry, p, flash)
     local qd, qw, qh = entry[1], entry[2], entry[3]
-    local x = U.snap(p.x - qw * SC / 2)
-    local y = U.snap(p.y + 2 - qh * SC)
-    if not entry[4]:find('^hgss') then          -- los de HGSS ya traen su sombra
+    if p._dEntry ~= entry then
+        p._dEntry = entry
+        p._dx, p._dy = U.snap(p.x - qw * SC / 2), U.snap(p.y + 2 - qh * SC)
+        p._dShadow = not entry[4]:find('^hgss')   -- los de HGSS ya traen su sombra
+    end
+    local x, y = p._dx, p._dy
+    if p._dShadow then
         lg.setColor(0, 0, 0, 0.28)
         lg.ellipse('fill', p.x, p.y, math.max(8, qw * 0.7), math.max(3, qw * 0.25))
     end
@@ -1562,19 +1567,28 @@ function W.drawProp(p, t)
     local typ = p.type
     -- Árboles y matas de ruta en los biomas verdes.
     if (typ == 'tree' or typ == 'deco') and DECO_BIOME[biome] and deco() then
-        local cat = typ == 'tree' and 'tree' or DECO_CAT[p.kind] or 'bush'
-        local list = DECO.byCat[cat]
-        if list and #list > 0 then
-            local i = floor(H(p.tx, p.ty, 4242) * #list) + 1
-            drawDeco(list[i], p, p.flash > 0)
+        local e = p._deco
+        if not e then
+            local cat = typ == 'tree' and 'tree' or DECO_CAT[p.kind] or 'bush'
+            local list = DECO.byCat[cat]
+            if list and #list > 0 then
+                e = list[floor(H(p.tx, p.ty, 4242) * #list) + 1]
+                p._deco = e
+            end
+        end
+        if e then
+            drawDeco(e, p, p.flash > 0)
             return
         end
     end
     -- Rocas rompibles de HGSS en los biomas verdes.
     if typ == 'rock' and DECO_BIOME[biome] and deco() then
-        local list = DECO.byCat.rock
-        if list and #list > 0 then
-            local e = list[floor(H(p.tx, p.ty, 4243) * #list) + 1]
+        local e = p._deco
+        if not e then
+            local list = DECO.byCat.rock
+            if list and #list > 0 then e = list[floor(H(p.tx, p.ty, 4243) * #list) + 1]; p._deco = e end
+        end
+        if e then
             lg.setColor(0, 0, 0, 0.22)
             lg.ellipse('fill', p.x, p.y, e[2] * 0.8, e[2] * 0.3)
             drawDeco(e, p, p.flash > 0)
@@ -1599,8 +1613,9 @@ function W.drawProp(p, t)
             fr = GRASS4.flower[(p.kind or 0) * 2 + 1 + floor(t * 2 + p.wiggle) % 2]
         end
         if fr then
+            if not p._gx then p._gx, p._gy = U.snap(p.x - 8 * SC), U.snap(p.y + 4 - 16 * SC) end
             lg.setColor(1, 1, 1, 1)
-            lg.draw(GRASS4.img, fr, U.snap(p.x - 8 * SC), U.snap(p.y + 4 - 16 * SC), 0, SC, SC)
+            lg.draw(GRASS4.img, fr, p._gx, p._gy, 0, SC, SC)
         end
         return
     end
