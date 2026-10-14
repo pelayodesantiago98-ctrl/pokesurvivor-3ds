@@ -144,13 +144,13 @@ function DB.commit()
     local s = DB.save
     if not s then return false end
     s.updated = now()
-    if G_STEP then G_STEP("guardar: codificando") end
     local ok, text = pcall(G.JSON.encode, s)
     if not ok then print("[DB] no se pudo codificar la partida: " .. tostring(text)) return false end
     -- Las pruebas aceleradas (--soak) no tocan la partida guardada de verdad: sus
     -- opciones (--difficulty, --partner...) y resultados se quedan en memoria.
     if G_SOAK then return true end
-    if G_STEP then G_STEP("guardar: escribiendo " .. #text .. " bytes") end
+    -- (Este paso va a la SD ya: guardar es lo que antes cerraba la consola.)
+    if G_STEP then G_STEP("guardar: escribiendo " .. #text .. " bytes", true) end
     local okc, ok2, err = pcall(writeSave, text)
     if not okc then ok2, err = false, ok2 end
     if not ok2 then print("[DB] no se pudo escribir " .. FILE .. ": " .. tostring(err)) return false end

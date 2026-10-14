@@ -28,6 +28,7 @@ for _, a in ipairs(arg or {}) do
     if tm then startTime = tonumber(tm) end
     if a == "--nohudcv" then G_NO_HUD_CANVAS = true end   -- HUD de abajo sin imagen guardada (comparar)
     if a == "--steps" then G_PRINT_STEPS = true; io.stdout:setvbuf("no") end   -- imprime los pasos G_STEP (el rastro de la 3DS)
+    if a == "--prof" and jit then jit.off() end   -- sin JIT desde el principio (también la carga de módulos)
 end
 -- Traza a fichero (solo en modo smoke): si el proceso se cuelga, dice hasta dónde llegó.
 local traceName = "smoke-trace.txt"          -- `--tag=X`: smoke-trace-X.txt (pruebas en paralelo)
@@ -35,8 +36,8 @@ for _, a in ipairs(arg or {}) do
     local tg = a:match("^%-%-tag=([%w_%-]+)$")
     if tg then traceName = "smoke-trace-" .. tg .. ".txt" end
 end
-local function trace(s)
-    if IS_CONSOLE_TRACE and G_STEP then G_STEP(s) end
+local function trace(s, flush)
+    if (IS_CONSOLE_TRACE or G_PRINT_STEPS) and G_STEP then G_STEP(s, flush) end
     if not smokeFrames then return end
     local f = io.open((love.filesystem.getSourceBaseDirectory and love.filesystem.getSourceBaseDirectory() or ".") .. "/build/" .. traceName, "a")
     if f then f:write(os.date("%H:%M:%S ") .. tostring(s) .. "\n") f:close() end
@@ -59,20 +60,36 @@ G_TRACE = trace
 local IS_CONSOLE = love._potion_version ~= nil
     or (love.system and love.system.getOS and love.system.getOS() == "Horizon")
 local steps = {}
--- En consola cada paso se escribe YA en sdmc:/pokesurvivor-trace.txt (abrir, escribir,
--- cerrar): si el cierre no es un error de Lua (no hay manejador que valga), la
--- última línea del fichero dice qué se estaba haciendo.
+-- En consola los pasos van a sdmc:/pokesurvivor-trace.txt, pero escribir en la SD
+-- cuesta ~20 ms: cada paso se guarda en memoria y se escribe todo junto (abrir,
+-- escribir, cerrar) sólo en los pasos marcados (`G_STEP(texto, true)`: arranque,
+-- primer dibujo, guardar, crear la imagen del HUD, fallos) y con la línea de
+-- «rendimiento» cada 10 s. Si el cierre no es un error de Lua (no hay manejador que
+-- valga), el fichero dice por dónde iba como mucho 10 s antes; si es un error de Lua,
+-- pokesurvivor-error.txt lleva además los 40 últimos pasos.
 local traceFile = "sdmc:/pokesurvivor-trace.txt"
-function G_STEP(s)
-    steps[#steps + 1] = tostring(s)
+local pending, nPending = {}, 0
+local function flushTrace()
+    if nPending == 0 then return end
+    local f = io.open(traceFile, "a")
+    if f then f:write(table.concat(pending, "", 1, nPending)); f:close() end
+    for i = 1, nPending do pending[i] = nil end
+    nPending = 0
+end
+G_FLUSH_TRACE = flushTrace
+function G_STEP(s, flush)
+    s = tostring(s)
+    steps[#steps + 1] = s
     if #steps > 40 then table.remove(steps, 1) end
-    if G_PRINT_STEPS then print("PASO " .. tostring(s)) end
+    if G_PRINT_STEPS then print(string.format("PASO %.3f %s", love.timer and love.timer.getTime() or 0, s)) end
     if IS_CONSOLE_TRACE then
-        local f = io.open(traceFile, "a")
-        if f then f:write(string.format("%.2f [lua %dKB] %s\n", love.timer and love.timer.getTime() or 0, collectgarbage("count"), tostring(s))); f:close() end
+        nPending = nPending + 1
+        pending[nPending] = string.format("%.2f [lua %dKB] %s\n", love.timer and love.timer.getTime() or 0, collectgarbage("count"), s)
+        if flush or nPending >= 40 or s:sub(1, 5) == "FALLO" then flushTrace() end
     end
 end
 local function writeConsoleError(msg, tb)
+    pcall(flushTrace)
     local f = io.open("sdmc:/pokesurvivor-error.txt", "a")
     if not f then return end
     f:write("==== " .. os.date("%Y-%m-%d %H:%M:%S") .. " · " .. tostring(_VERSION)
@@ -271,7 +288,7 @@ local function isTop(screen)
     return screen ~= "bottom"
 end
 
-trace("modulos cargados")
+trace("modulos cargados", true)
 
 function love.load()
     if love.graphics.setDefaultFilter then pcall(love.graphics.setDefaultFilter, "nearest", "nearest") end
@@ -284,7 +301,7 @@ function love.load()
     G.Icons.load()
     trace("icons.load")
     G.Flow.boot()
-    trace("boot")
+    trace("boot", true)
     if G_BAKE_BG then
         G_BAKING = true
         local cv = love.graphics.newCanvas(G.UI.W, G.UI.H)
@@ -300,6 +317,7 @@ function love.load()
         return
     end
     if G.Audio.preload then pcall(G.Audio.preload) end
+    trace("audio")
     -- `love game --run`: empieza una partida directamente (capturas y depuración).
     -- `love game --ui=<pantalla>`: abre esa pantalla de la interfaz (menu, dex, gacha, test...).
     for _, a in ipairs(arg or {}) do
@@ -455,8 +473,11 @@ local function tourUpdate(dt)
     tour.shotIn = st[2] - 1.6            -- captura a los 1,6 s de entrar
 end
 local shotAt, shotT = nil, 0     -- `--shot=N`: guarda shot.png en la carpeta de guardado a los N s y sale
+local levelEvery, levelT = nil, 0 -- `--levelevery=N` (con --demo): sube de nivel cada N s (medir las cartas)
 for _, a in ipairs(arg or {}) do
     if a == "--demo" then demo = true end
+    local le = a:match("^%-%-levelevery=(%d+)$")
+    if le then levelEvery = tonumber(le) end
     local s = a:match("^%-%-shot=(%d+)$")
     if s then shotAt = tonumber(s) end
 end
@@ -467,6 +488,8 @@ for _, a in ipairs(arg or {}) do
     if n then shotName = "shot-" .. n .. ".png" end
 end
 local vertLogT = 0
+local hudPrev = 0               -- repintados del HUD (src/ui/run.lua) hasta la última línea «rendimiento»
+local firstDrawDone = false
 -- Tiempos medidos en la consola (ms acumulados en la ventana de 10 s).
 PERF = { upd = 0, top = 0, bot = 0, n = 0, worst = 0 }
 function love.update(dt)
@@ -480,10 +503,11 @@ function love.update(dt)
         if G_STEP then
             local n = math.max(1, PERF.n)
             local pl = G.Game.player and G.Game.player()
-            G_STEP(string.format("rendimiento: %d fps | logica %.1f ms, arriba %.1f ms, abajo %.1f ms, peor fotograma %.0f ms | pico %d vertices, saltados %d | enemigos %d | hojas %d | pantalla %s",
+            G_STEP(string.format("rendimiento: %d fps | logica %.1f ms, arriba %.1f ms, abajo %.1f ms, peor fotograma %.0f ms | pico %d vertices, saltados %d | enemigos %d | hojas %d | hud repintado %d | pantalla %s",
                 love.timer.getFPS(), PERF.upd * 1000 / n, PERF.top * 1000 / n, PERF.bot * 1000 / n, PERF.worst * 1000,
                 G_VERTS_MAX, G_VERTS_SKIPPED, (pl and G.EnemyMgr.count()) or 0, G.Sprites.loadedCount(),
-                tostring(G.UI.current and G.UI.current())))
+                (HUD_REPAINTS or 0) - hudPrev, tostring(G.UI.current and G.UI.current())), true)
+            hudPrev = HUD_REPAINTS or 0
             PERF.upd, PERF.top, PERF.bot, PERF.n, PERF.worst = 0, 0, 0, 0, 0
         end
         if G_COUNTDRAW then print("VERTICES pico=" .. G_VERTS_MAX .. " saltados=" .. G_VERTS_SKIPPED) end
@@ -511,6 +535,10 @@ function love.update(dt)
             if startLevel then G.Game.debugSetLevel(startLevel) end
         end
         G.Game.autoplay(dt)
+        if levelEvery and G.Game.state() == "playing" then
+            levelT = levelT + dt
+            if levelT >= levelEvery then levelT = 0; G.Game.debugLevelUp() end
+        end
     end
     -- `--profany`: mide también fuera de la partida (menús con --ui=<pantalla>).
     if G_PROF and (G_PROF.any or G.Game.state() == "playing") then
@@ -520,6 +548,7 @@ function love.update(dt)
         end
         G_PROF.t = G_PROF.t + dt
         G_PROF.cnt["love.update"] = (G_PROF.cnt["love.update"] or 0) + 1
+        G_PROF.f0 = love.timer.getTime()          -- peor fotograma (lógica + dibujo): ver love.draw
         if G_PROF.t > (G_PROF.secs or 60) then
             local ne = #G.EnemyMgr.all()
             print("enemigos al final: " .. ne .. "  fps medio PC sin JIT: " .. string.format("%.1f", G_PROF.cnt["love.update"] / G_PROF.t))
@@ -615,6 +644,10 @@ function love.update(dt)
             love.event.quit()
         end
     end
+    -- Hasta que no se ha visto la primera imagen no se mueve nada: el primer paso del
+    -- mundo (genera el terreno alrededor de la cámara) tarda en la 3DS más de un
+    -- segundo y así no retrasa la pantalla de título, que es lo primero que se ve.
+    if not firstDrawDone then Input.endFrame() return end
     dt = math.min(1 / 30, dt)
     local tu = love.timer.getTime()
     G.Game.frame(dt)
@@ -628,7 +661,11 @@ function love.draw(screen)
     -- vez, el doble de trabajo y de vértices). love.graphics.set3D(false) cerraba la
     -- consola al arrancar, por eso se hace así.
     if screen == "right" then return end
-    if G_STEP and not G_FIRSTDRAW[screen] then G_FIRSTDRAW[screen] = true; G_STEP("primer dibujo " .. tostring(screen)) end
+    if G_STEP and not G_FIRSTDRAW[screen] then
+        G_FIRSTDRAW[screen] = true
+        -- A la SD cuando ya se han dibujado las dos pantallas (una sola escritura).
+        G_STEP("primer dibujo " .. tostring(screen), G_FIRSTDRAW.bottom and (G_FIRSTDRAW.top or G_FIRSTDRAW.left))
+    end
     G_DRAWN = 0
     local td = love.timer.getTime()
     local t0 = G_PROF and G_PROF.on and love.timer.getTime()
@@ -644,6 +681,16 @@ function love.draw(screen)
         local k = isTop(screen) and "DIBUJO pantalla arriba" or "DIBUJO pantalla abajo"
         G_PROF.acc[k] = (G_PROF.acc[k] or 0) + love.timer.getTime() - t0
         G_PROF.cnt[k] = (G_PROF.cnt[k] or 0) + 1
+        if not isTop(screen) and G_PROF.f0 then
+            local ft = love.timer.getTime() - G_PROF.f0
+            local cu = tostring(G.UI.current())
+            if ft > (G_PROF.worstF or 0) then G_PROF.worstF = ft; G_PROF.worstUI = cu end
+            -- Al cambiar de pantalla (abrir las cartas, la pausa...): cuánto tarda ese fotograma.
+            if cu ~= G_PROF.lastUI then
+                print(string.format("CAMBIO %s -> %s: fotograma %.2f ms", tostring(G_PROF.lastUI), cu, ft * 1000))
+                G_PROF.lastUI = cu
+            end
+        end
     end
     if G_COUNTDRAW then
         local k = (isTop(screen) and "arriba " or "abajo ") .. tostring(G.UI.current and G.UI.current() or "?")
@@ -670,6 +717,7 @@ function love.draw(screen)
         end
     end
     G_CHARS = 0
+    firstDrawDone = true
 end
 
 -- Botones de la consola llegan como gamepad; en PC nest los emula con el teclado.
@@ -737,6 +785,9 @@ for _, a in ipairs(arg or {}) do
             local s = b:match("^%-%-profsecs=(%d+)$")
             if s then G_PROF.secs = tonumber(s) end
             if b == "--profany" then G_PROF.any = true end
+            -- `--profmem`: sin recolector durante la medida; dice cuánta memoria (basura)
+            -- crea cada fotograma. En la 3DS recogerla también cuesta.
+            if b == "--profmem" then G_PROF.mem = true end
         end
         local function wrapTable(name, t, seen)
             if type(t) ~= "table" or seen[t] then return end
@@ -756,6 +807,12 @@ for _, a in ipairs(arg or {}) do
             end
         end
         G_PROF.install = function()
+            if G_PROF.mem then
+                -- Sólo memoria: sin envolver funciones (el envoltorio también crea basura).
+                collectgarbage("collect"); collectgarbage("stop")
+                G_PROF.mem0 = collectgarbage("count")
+                return
+            end
             local seen = {}
             for name, t in pairs(G) do
                 if type(t) == "table" and name ~= "U" and name ~= "JSON" then wrapTable(name, t, seen) end
@@ -776,11 +833,18 @@ for _, a in ipairs(arg or {}) do
             for k in pairs(acc) do keys[#keys + 1] = k end
             table.sort(keys, function(a, b) return acc[a] > acc[b] end)
             local frames = cnt["love.update"] or 1
+            if G_PROF.mem0 then
+                print(string.format("MEMORIA creada: %.2f KB por fotograma (%d fotogramas)",
+                    (collectgarbage("count") - G_PROF.mem0) / frames, frames))
+                collectgarbage("restart")
+            end
             print(string.format("PERFIL (%d fotogramas, ms por fotograma, inclusivo):", frames))
             for i = 1, math.min(60, #keys) do
                 local k = keys[i]
                 print(string.format("  %8.3f ms  %8.1f llamadas/f  %s", acc[k] * 1000 / frames, cnt[k] / frames, k))
             end
+            print(string.format("PEOR FOTOGRAMA %.2f ms (pantalla %s)", (G_PROF.worstF or 0) * 1000, tostring(G_PROF.worstUI)))
+            print(string.format("HUD repintado %d veces", HUD_REPAINTS or 0))
             local vk = {}
             for k in pairs(vacc) do vk[#vk + 1] = k end
             table.sort(vk, function(a, b) return vacc[a] > vacc[b] end)
@@ -812,15 +876,21 @@ if (IS_CONSOLE or forceWrap) and not smokeFrames then
     for _, name in ipairs({ "update", "draw", "touchpressed", "touchmoved", "touchreleased", "gamepadpressed", "gamepadreleased", "gamepadaxis" }) do
         local fn = love[name]
         if fn then
+            -- Lua 5.1 (la de la 3DS): xpcall NO pasa argumentos a la función (LuaJIT
+            -- del PC sí). Van en variables del cierre (hasta 6, las de los callbacks
+            -- de LÖVE) y la función y el manejador se crean una vez, no en cada
+            -- llamada (update y draw van en cada fotograma: nada de basura).
+            local a1, a2, a3, a4, a5, a6
+            local errMsg, errTb
+            local function call() return fn(a1, a2, a3, a4, a5, a6) end
+            local function handler(e) errMsg, errTb = e, debug.traceback("", 2); return e end
             love[name] = function(...)
-                -- Lua 5.1 (la de la 3DS): xpcall NO pasa argumentos a la función (LuaJIT
-                -- del PC sí), así que van en un cierre.
-                local args, n = { ... }, select("#", ...)
-                local ok, err = xpcall(function() return fn(unpack(args, 1, n)) end,
-                                       function(e) return { e = e, tb = debug.traceback("", 2) } end)
+                a1, a2, a3, a4, a5, a6 = ...
+                local ok = xpcall(call, handler)
+                a1, a2, a3, a4, a5, a6 = nil, nil, nil, nil, nil, nil
                 if not ok then
-                    pcall(writeConsoleError, err.e, err.tb)
-                    error(err.e, 0)
+                    pcall(writeConsoleError, errMsg, errTb)
+                    error(errMsg, 0)
                 end
             end
         end

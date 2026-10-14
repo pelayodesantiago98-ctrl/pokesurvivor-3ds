@@ -12,6 +12,20 @@ local W, H = 400, 240
 
 local function font(size) return G.UI.font(size) end
 
+-- Textos que cambian como mucho una vez por segundo (reloj, clima, poder, grieta):
+-- se rehacen sólo cuando cambia lo que muestran, no en cada fotograma.
+local clockSec, clockTxt = -1, ""
+local function clockText(t)
+    local s = math.floor(t)
+    if s ~= clockSec then clockSec, clockTxt = s, U.mmss(s) end
+    return clockTxt
+end
+local wxName, wxLeft, wxTxt, wxW = nil, -1, "", 0
+local powName, powLeft, powTxt = nil, -1, ""
+local bossName, bossTxt = nil, ""
+local riftM, riftTtl, riftFar, riftNear = -1, -1, "", ""
+local arenaSec, arenaTxt = -1, ""
+
 local function arrowTo(sx, sy, col, label)
     -- Flecha en el borde hacia un punto fuera de la vista.
     local M = 18
@@ -48,21 +62,27 @@ local function drawRun(pl)
     -- Solo el reloj arriba: nombre, nivel, vida, derrotados y monedas van en la
     -- pantalla de abajo; el nombre de la zona sale en su cartel al entrar.
     lg.setFont(font(16))
+    local clock = clockText(G.Game.time())
     U.setColor("#000000", 0.6)
-    lg.printf(U.mmss(G.Game.time()), 1, 7, W, "center")
+    lg.printf(clock, 1, 7, W, "center")
     U.setColor("#ffffff", 0.95)
-    lg.printf(U.mmss(G.Game.time()), 0, 6, W, "center")
+    lg.printf(clock, 0, 6, W, "center")
 
     -- Clima (arriba a la derecha)
     local wx = G.Weather.current and G.Weather.current()
     if wx then
         lg.setFont(font(10))
-        local txt = string.upper(wx.name or "") .. " · " .. math.ceil(wx.left or 0) .. "s"
-        local tw = font(10):getWidth(txt) + 8
+        local left = math.ceil(wx.left or 0)
+        if wx.name ~= wxName or left ~= wxLeft then
+            wxName, wxLeft = wx.name, left
+            wxTxt = string.upper(wx.name or "") .. " · " .. left .. "s"
+            wxW = font(10):getWidth(wxTxt) + 8
+        end
+        local tw = wxW
         U.setColor("#000000", 0.55)
         lg.rectangle("fill", W - tw - 6, 6, tw, 14, 4, 4)
         U.setColor(wx.color or "#ffffff")
-        lg.print(txt, W - tw - 2, 7)
+        lg.print(wxTxt, W - tw - 2, 7)
     end
 
     -- Barra del jefe
@@ -73,7 +93,8 @@ local function drawRun(pl)
         G.UI.bar((W - 220) / 2, 38, 220, 8, boss.hp / boss.maxHp, "#ffcb3d")
         lg.setFont(font(10))
         U.setColor("#ffe9a0")
-        lg.printf(string.upper(boss.name), 0, 46, W, "center")
+        if boss.name ~= bossName then bossName, bossTxt = boss.name, string.upper(boss.name) end
+        lg.printf(bossTxt, 0, 46, W, "center")
     end
 
     -- Shinies fuera de pantalla
@@ -89,7 +110,12 @@ local function drawRun(pl)
     if pl.power then
         lg.setFont(font(10))
         U.setColor(pl.power.def.color or "#ffffff")
-        lg.print(string.upper(pl.power.def.name or "") .. " " .. math.ceil(pl.power.t) .. "s", 6, 32)
+        local left = math.ceil(pl.power.t)
+        if pl.power.def.name ~= powName or left ~= powLeft then
+            powName, powLeft = pl.power.def.name, left
+            powTxt = string.upper(pl.power.def.name or "") .. " " .. left .. "s"
+        end
+        lg.print(powTxt, 6, 32)
     end
 
     -- Grieta: flecha si no se ve; encima, flecha que bota; en la arena, cuenta atrás.
@@ -100,21 +126,29 @@ local function drawRun(pl)
             local now = U.now()
             local beat = 0.5 + math.sin(now * 7) * 0.5
             local col = beat > 0.5 and "#e2d0ff" or "#a06bff"
+            local m, s = U.round(dist / 32), math.ceil(ttl)
+            if m ~= riftM or s ~= riftTtl then
+                riftM, riftTtl = m, s
+                riftFar = "GRIETA · " .. m .. " m · " .. s .. " s"
+                riftNear = "GRIETA · " .. s .. " s"
+            end
             if sx < 0 or sx > W or sy < 0 or sy > H then
-                arrowTo(sx, sy, col, "GRIETA · " .. U.round(dist / 32) .. " m · " .. math.ceil(ttl) .. " s")
+                arrowTo(sx, sy, col, riftFar)
             else
                 local by = sy - 20 - math.abs(math.sin(now * 4)) * 5
                 U.setColor(col)
                 lg.polygon("fill", sx - 7, by - 6, sx + 7, by - 6, sx, by + 4)
                 lg.setFont(font(10))
-                lg.printf("GRIETA · " .. math.ceil(ttl) .. " s", sx - 60, by - 18, 120, "center")
+                lg.printf(riftNear, sx - 60, by - 18, 120, "center")
             end
         end
     end
     if G.Rift.inArena() then
         lg.setFont(font(10))
         U.setColor("#d9c2ff")
-        lg.printf("GRIETA · " .. U.mmss(G.Rift.timeLeft and G.Rift.timeLeft() or 0), 0, boss and 58 or 40, W, "center")
+        local s = math.floor(G.Rift.timeLeft and G.Rift.timeLeft() or 0)
+        if s ~= arenaSec then arenaSec, arenaTxt = s, "GRIETA · " .. U.mmss(s) end
+        lg.printf(arenaTxt, 0, boss and 58 or 40, W, "center")
     end
 
     -- La Sentencia de Arceus: ceniza, contador y flecha hacia él.
@@ -157,21 +191,52 @@ function T.draw()
     if pl and st ~= "ui" then
         drawRun(pl)
     elseif T.overlay then
-        local first = T.overlay ~= T.__lastOverlay
-        if first and G_STEP then G_STEP("pantalla de arriba: ficha nueva") end
-        T.__trace = first and G_STEP or nil
         T.overlay()
-        T.__trace = nil
-        if first then T.__lastOverlay = T.overlay; if G_STEP then G_STEP("pantalla de arriba: ficha ok") end end
     end
     lg.setFont(font(12))
     lg.setColor(1, 1, 1, 1)
 end
 
+-- Lo que la ficha calcula de cada Pokémon (textos, anchos, movimientos que puede
+-- aprender) se hace una vez por dex: la ficha se dibuja en cada fotograma.
+local cardInfo = {}
+local MAX_STAT = { hp = 183, atk = 1.55, spd = 137 }
+local function infoOf(dex, p)
+    local c = cardInfo[dex]
+    if c then return c end
+    local sm = G.Moves.BY_ID[G.startMoveOf(dex)]
+    local icons = {}
+    for i, id in ipairs(G.Moves.poolFor(p)) do
+        if i > 12 then break end
+        icons[i] = "move:" .. id
+    end
+    c = {
+        head = "Nº " .. G.UI.pad3(p.dex) .. " · " .. (G.UI.GEN_NAMES[p.gen] or ""),
+        hp = tostring(p.hp), atk = string.format("x%.2f", p.atk), spd = tostring(p.spd),
+        start = sm and sm.name or "?",
+        startX = 190 + font(10):getWidth("Empieza con "),
+        icons = icons,
+        missing = "Aún no lo tienes. Consíguelo en el banner de " .. (G.UI.GEN_NAMES[p.gen] or "") .. " o derrotándolo cuando salga shiny.",
+    }
+    cardInfo[dex] = c
+    return c
+end
+local footW = {}                       -- pie de la ficha -> ancho de su recuadro
+local function statBar(label, v, m, txt, y)
+    lg.setFont(font(10))
+    U.setColor("#eaf2ff")
+    lg.print(label, 190, y)
+    G.UI.bar(250, y + 3, 92, 6, v / m, "#4fd1ff")
+    U.setColor("#ffffff")
+    lg.printf(txt, 344, y, 42, "right")
+end
+local HIDDEN = { alpha = 0.001 }
+
 -- Ficha grande de un Pokémon sobre el fondo (Pokédex, resultado del test, gacha).
 function T.pokemonCard(dex, opts)
     local p = G.DEX_BY[dex]
     if not p then return end
+    local info = infoOf(dex, p)
     local own = not opts or opts.own ~= false
     local shiny = opts and opts.shiny
     local col = shiny and "#9ae6ff" or (own and U.TYPE_COLOR[p.types[1]] or "#5b83d6")
@@ -182,67 +247,51 @@ function T.pokemonCard(dex, opts)
     lg.rectangle("fill", 180, 28, 212, 176, 6, 6)
     U.setColor("#3a5a9a")
     lg.rectangle("line", 180.5, 28.5, 211, 175, 6, 6)
-    local tr = T.__trace
-    if tr then tr("ficha: escenario") end
     G.UI.stage(20, 30, 150, 170, col)
-    if tr then tr("ficha: sprite") end
     local anim = G.UI.menuAnim(dex, 3, shiny)
     if own then
         anim:draw(95, 180, nil)
     else
         lg.setColor(0.1, 0.1, 0.2, 1)
-        anim:draw(95, 180, { alpha = 0.001 })
+        anim:draw(95, 180, HIDDEN)
         lg.setFont(font(22))
         U.setColor("#5b83d6")
         lg.printf("?", 20, 100, 150, "center")
     end
-    if tr then tr("ficha: textos") end
     lg.setFont(font(10))
     U.setColor("#8fa3c4")
-    lg.print("Nº " .. G.UI.pad3(p.dex) .. " · " .. (G.UI.GEN_NAMES[p.gen] or ""), 190, 34)
+    lg.print(info.head, 190, 34)
     lg.setFont(font(22))
     U.setColor("#ffffff")
     lg.print(own and p.name or "???", 190, 46)
     G.UI.stars(p.rarity, 190, 76, 10)
     if own then
         G.UI.typeChips(p.types, 190, 92, 10)
-        local max = { hp = 183, atk = 1.55, spd = 137 }
-        local function bar(label, v, m, txt, y)
-            lg.setFont(font(10))
-            U.setColor("#eaf2ff")
-            lg.print(label, 190, y)
-            G.UI.bar(250, y + 3, 92, 6, v / m, "#4fd1ff")
-            U.setColor("#ffffff")
-            lg.printf(txt, 344, y, 42, "right")
-        end
-        bar("Vida", p.hp, max.hp, tostring(p.hp), 116)
-        bar("Ataque", p.atk, max.atk, string.format("x%.2f", p.atk), 132)
-        bar("Velocidad", p.spd, max.spd, tostring(p.spd), 148)
-        if tr then tr("ficha: movimientos") end
-        local sm = G.Moves.BY_ID[G.startMoveOf(dex)]
+        statBar("Vida", p.hp, MAX_STAT.hp, info.hp, 116)
+        statBar("Ataque", p.atk, MAX_STAT.atk, info.atk, 132)
+        statBar("Velocidad", p.spd, MAX_STAT.spd, info.spd, 148)
         lg.setFont(font(10))
         U.setColor("#eaf2ff")
         lg.print("Empieza con ", 190, 168)
         U.setColor("#ffd23f")
-        lg.print(sm and sm.name or "?", 190 + font(10):getWidth("Empieza con "), 168)
+        lg.print(info.start, info.startX, 168)
         -- Movimientos que puede aprender
-        local pool = G.Moves.poolFor(p)
+        local icons = info.icons
         local x = 190
-        for i, id in ipairs(pool) do
-            if i > 12 then break end
-            G.Icons.draw("move:" .. id, x, 184, 14)
+        for i = 1, #icons do
+            G.Icons.draw(icons[i], x, 184, 14)
             x = x + 16
         end
         lg.setColor(1, 1, 1, 1)
     else
         lg.setFont(font(10))
         U.setColor("#8fa3c4")
-        lg.printf("Aún no lo tienes. Consíguelo en el banner de " .. (G.UI.GEN_NAMES[p.gen] or "") .. " o derrotándolo cuando salga shiny.", 190, 100, 190, "left")
+        lg.printf(info.missing, 190, 100, 190, "left")
     end
-    if tr then tr("ficha: pie") end
     if opts and opts.footer then
         lg.setFont(font(10))
-        local fw = font(10):getWidth(opts.footer) + 16
+        local fw = footW[opts.footer]
+        if not fw then fw = font(10):getWidth(opts.footer) + 16; footW[opts.footer] = fw end
         U.setColor("#0a1430", 0.85)
         lg.rectangle("fill", (W - fw) / 2, H - 23, fw, 16, 4, 4)
         U.setColor("#ffd23f")

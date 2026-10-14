@@ -12,24 +12,61 @@ local idx, scores, result, picked = 1, {}, nil, nil
 -- ---------------- preguntas ----------------
 local test = {}
 function test.enter() end
+-- Estilos de letra y botones (tablas fijas: nada de tablas nuevas en cada fotograma).
+local HEAD_ST = { s = 1, color = "#e8e4ff", shadow = "#3a3458" }
+local Q_ST = { s = 2, gap = 1, color = "#ffffff", shadow = "#3a3458" }
+local A_ST = { s = 1.5, gap = 1, color = "#ffffff", shadow = "#1e3a6e" }
+local BTN_ON, BTN_OFF = { on = true }, { on = false }
+local ANSWER_ID = { "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8" }
+-- Disposición de cada pregunta (líneas partidas y sus posiciones), calculada una
+-- vez: { head, hx, lines = { {texto, x, y}... } }, como hacían PF.printBlock y PF.wrap.
+local layouts = {}
+local function layoutOf(i)
+    local L = layouts[i]
+    if L then return L end
+    local PF = G.PixelFont
+    local Q = G.PERSONALITY_TEST
+    local q = Q[i]
+    L = { lines = {}, answers = {} }
+    L.head = "PREGUNTA " .. i .. " DE " .. #Q
+    L.hx = (W - PF.width(L.head, 1)) / 2
+    -- Enunciado (lo que hace PF.printBlock(q.q, 8, 32, W - 16, Q_ST)).
+    local s, x, y, w = Q_ST.s, 8, 32, W - 16
+    local lh = PF.height(s) + math.max(2, math.floor(PF.height(s) / 3))
+    for k, l in ipairs(PF.wrap(q.q, s, w, Q_ST.gap)) do
+        L.lines[k] = { l, x + (w - PF.width(l, s, Q_ST.gap)) / 2, y + (k - 1) * lh }
+    end
+    -- Respuestas, centradas en su botón.
+    for k, a in ipairs(q.a) do
+        local by = 96 + (k - 1) * 35
+        local lines = PF.wrap(a.t, 1.5, W - 36, 1)
+        local alh = 12
+        local ty = by + math.floor((31 - #lines * alh + 2) / 2)
+        local al = {}
+        for j, l in ipairs(lines) do al[j] = { l, (W - PF.width(l, 1.5, 1)) / 2, ty + (j - 1) * alh } end
+        L.answers[k] = { by = by, lines = al }
+    end
+    layouts[i] = L
+    return L
+end
 function test.draw()
     local Q = G.PERSONALITY_TEST
-    local q = Q[idx]
+    local L = layoutOf(idx)
     UI.bar(10, 8, W - 20, 5, (idx - 1) / #Q, UI.C.gold)
     -- Con la fuente pixelada propia: se ve igual en el PC y en la 3DS (la fuente del
     -- sistema de la consola salía diminuta).
     local PF = G.PixelFont
-    local head = "PREGUNTA " .. idx .. " DE " .. #Q
-    PF.print(head, (W - PF.width(head, 1)) / 2, 18, { s = 1, color = "#e8e4ff", shadow = "#3a3458" })
-    PF.printBlock(q.q, 8, 32, W - 16, { s = 2, gap = 1, color = "#ffffff", shadow = "#3a3458" })
-    for i, a in ipairs(q.a) do
-        local by = 96 + (i - 1) * 35
-        UI.button("a" .. i, 10, by, W - 20, 31, "", { on = picked == i })
-        local lines = PF.wrap(a.t, 1.5, W - 36, 1)
-        local lh = 12
-        local ty = by + math.floor((31 - #lines * lh + 2) / 2)
-        for k, l in ipairs(lines) do
-            PF.print(l, (W - PF.width(l, 1.5, 1)) / 2, ty + (k - 1) * lh, { s = 1.5, gap = 1, color = "#ffffff", shadow = "#1e3a6e" })
+    PF.print(L.head, L.hx, 18, HEAD_ST)
+    for k = 1, #L.lines do
+        local l = L.lines[k]
+        PF.print(l[1], l[2], l[3], Q_ST)
+    end
+    for i = 1, #L.answers do
+        local A = L.answers[i]
+        UI.button(ANSWER_ID[i] or ("a" .. i), 10, A.by, W - 20, 31, "", picked == i and BTN_ON or BTN_OFF)
+        for k = 1, #A.lines do
+            local l = A.lines[k]
+            PF.print(l[1], l[2], l[3], A_ST)
         end
     end
 end
@@ -59,22 +96,30 @@ UI.register("test", test)
 
 -- ---------------- resultado ----------------
 local res = {}
+local resTrait, resMate = "", ""      -- textos del resultado (se hacen al entrar)
+local R_T1 = { size = 12, color = UI.C.muted, w = W, align = "center" }
+local R_T2 = { size = 22, color = UI.C.gold, w = W, align = "center" }
+local R_T3 = { size = 12, w = W - 32, align = "center" }
+local R_T4 = { size = 16, w = W, align = "center" }
+local R_OK = { size = 12, color = "#3c9c54" }
+local R_OTHER = { size = 12 }
 function res.enter()
     local mon = G.DEX_BY[result.dex]
+    resTrait = result.trait:sub(1, 1):upper() .. result.trait:sub(2)
+    resMate = "Tu compañero: " .. mon.name
     G.Sprites.preload({ result.dex }, false)
+    local card = { footer = "¡" .. mon.name .. " quiere ir contigo!" }
     G.TopUI.overlay = function()
-        G.TopUI.pokemonCard(result.dex, { footer = "¡" .. mon.name .. " quiere ir contigo!" })
+        G.TopUI.pokemonCard(result.dex, card)
     end
 end
 function res.draw()
-    local mon = G.DEX_BY[result.dex]
-    local trait = result.trait:sub(1, 1):upper() .. result.trait:sub(2)
-    UI.text("Tu personalidad es...", 0, 14, { size = 12, color = UI.C.muted, w = W, align = "center" })
-    UI.text(trait, 0, 30, { size = 22, color = UI.C.gold, w = W, align = "center" })
-    UI.text(G.TRAIT_TEXT[result.trait] or "", 16, 62, { size = 12, w = W - 32, align = "center" })
-    UI.text("Tu compañero: " .. mon.name, 0, 100, { size = 16, w = W, align = "center" })
-    UI.button("ok", 30, 150, 260, 30, "¡Vamos juntos!", { size = 12, color = "#3c9c54" })
-    UI.button("other", 30, 190, 260, 30, "Elegir otro", { size = 12 })
+    UI.text("Tu personalidad es...", 0, 14, R_T1)
+    UI.text(resTrait, 0, 30, R_T2)
+    UI.text(G.TRAIT_TEXT[result.trait] or "", 16, 62, R_T3)
+    UI.text(resMate, 0, 100, R_T4)
+    UI.button("ok", 30, 150, 260, 30, "¡Vamos juntos!", R_OK)
+    UI.button("other", 30, 190, 260, 30, "Elegir otro", R_OTHER)
 end
 local function choose(dex)
     if G_STEP then G_STEP("elegir inicial " .. tostring(dex)) end
@@ -83,7 +128,6 @@ local function choose(dex)
     save.partner = dex
     save.personality = result and { trait = result.trait, scores = scores } or nil
     G.DB.grant(dex, "starter")
-    if G_STEP then G_STEP("concedido; guardando") end
     G.DB.commit()
     if G_STEP then G_STEP("guardado") end
     UI.toast("¡" .. G.DEX_BY[dex].name .. " se une a ti!")
@@ -120,8 +164,14 @@ function starters.refreshTop()
         G.TopUI.overlay = nil
     end
 end
+local CELL_ID = {}                    -- "st1", "st2"... (sin concatenar en cada fotograma)
+local S_TITLE = { size = 12, color = UI.C.gold, w = W, align = "center" }
+local S_NAME = { size = 10, color = UI.C.muted, w = 120, align = "left" }
+local S_BACK = { size = 10 }
+local S_OK_ON = { size = 10, color = "#3c9c54", enabled = true }
+local S_OK_OFF = { size = 10, color = "#3c9c54", enabled = false }
 function starters.draw()
-    UI.text("Elige a tu compañero", 0, 2, { size = 12, color = UI.C.gold, w = W, align = "center" })
+    UI.text("Elige a tu compañero", 0, 2, S_TITLE)
     for i, s in ipairs(G.STARTERS) do
         local c, r = (i - 1) % COLS, math.floor((i - 1) / COLS)
         local x, y = 16 + c * CW, 18 + r * CH
@@ -131,12 +181,14 @@ function starters.draw()
         if on then U.setColor(UI.C.gold); lg.rectangle("line", x + 0.5, y + 0.5, CW - 3, CH - 3, 4, 4) end
         lg.setColor(1, 1, 1, 1)
         G.Sprites.drawStill(s.dex, x + CW / 2 - 1, y + CH - 6, 0.5)
-        UI.hitbox("st" .. i, x, y, CW - 2, CH - 2)
+        local id = CELL_ID[i]
+        if not id then id = "st" .. i; CELL_ID[i] = id end
+        UI.hitbox(id, x, y, CW - 2, CH - 2)
     end
     local name = picked and G.DEX_BY[picked].name or "Selecciona un Pokémon"
-    UI.text(name, 0, 220, { size = 10, color = UI.C.muted, w = 120, align = "left" })
-    UI.button("back", 120, 216, 90, 20, "Volver", { size = 10 })
-    UI.button("ok", 216, 216, 90, 20, "Elegir", { size = 10, color = "#3c9c54", enabled = picked ~= nil })
+    UI.text(name, 0, 220, S_NAME)
+    UI.button("back", 120, 216, 90, 20, "Volver", S_BACK)
+    UI.button("ok", 216, 216, 90, 20, "Elegir", picked ~= nil and S_OK_ON or S_OK_OFF)
 end
 function starters.touch(x, y)
     local id = UI.hit(x, y)
@@ -147,7 +199,10 @@ function starters.touch(x, y)
     if i then picked = G.STARTERS[i].dex; G.Audio.sfx("select"); starters.refreshTop() end
 end
 function starters.button(b)
-    local i = picked and U.indexOf((function() local t = {} for k, s in ipairs(G.STARTERS) do t[k] = s.dex end return t end)(), picked) or 1
+    local i = 1
+    if picked then
+        for k, s in ipairs(G.STARTERS) do if s.dex == picked then i = k break end end
+    end
     local n = #G.STARTERS
     if b == "dpright" then i = i % n + 1 elseif b == "dpleft" then i = (i - 2) % n + 1
     elseif b == "dpdown" then i = (i - 1 + COLS) % n + 1 elseif b == "dpup" then i = (i - 1 - COLS) % n + 1

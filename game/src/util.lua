@@ -142,10 +142,24 @@ end
 local function hex2(v)
     return string.format("%02x", U.clamp(floor(v * 255 + 0.5), 0, 255))
 end
+-- Mezcla de dos colores. Cacheada por pareja y por t (redondeado a 1/1024, menos
+-- de lo que se nota en 8 bits por canal): el marco de selección late con ella en
+-- cada fotograma y así no crea cadenas nuevas cada vez.
+local mixCache = {}
 function U.hexMix(h1, h2, t)
+    local c1 = mixCache[h1]
+    if not c1 then c1 = {}; mixCache[h1] = c1 end
+    local c2 = c1[h2]
+    if not c2 then c2 = {}; c1[h2] = c2 end
+    local tq = floor(t * 1024 + 0.5)
+    local s = c2[tq]
+    if s then return s end
     local r1, g1, b1 = U.rgb(h1)
     local r2, g2, b2 = U.rgb(h2)
-    return "#" .. hex2(r1 + (r2 - r1) * t) .. hex2(g1 + (g2 - g1) * t) .. hex2(b1 + (b2 - b1) * t)
+    t = tq / 1024
+    s = "#" .. hex2(r1 + (r2 - r1) * t) .. hex2(g1 + (g2 - g1) * t) .. hex2(b1 + (b2 - b1) * t)
+    c2[tq] = s
+    return s
 end
 -- Aclara (k>0) u oscurece (k<0) un color.
 function U.shade(hex, k)
