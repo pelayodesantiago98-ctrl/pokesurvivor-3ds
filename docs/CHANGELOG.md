@@ -25,6 +25,13 @@ en el PC.
   generados): `dropBatch` usaba una variable antes de declararla.
 - **Tirones al subir de nivel y al cambiar de pantalla:** cada cambio de pantalla
   escribía en la SD (~20 ms). Ahora el rastro se guarda en memoria y se escribe junto.
+- **Tirones de 130-350 ms al moverse por el mapa** (y 1,7 s al empezar la partida):
+  generar un trozo nuevo del mapa cuesta ~70-100 ms en la consola y lo pedían de golpe
+  consultas lejanas (colisiones de enemigos, la rejilla de colisión de los árboles
+  vecinos, la lista de objetos visibles). Ahora esas consultas no generan nada; los
+  trozos se generan por adelantado, en la dirección en que se mueve la cámara y con el
+  tiempo que sobra de cada fotograma. Al empezar sólo se generan los 4 de la vista. El
+  mapa sale idéntico (misma semilla, mismos trozos).
 - **La Pokédex tardaba en enseñar los sprites** y daba tirones al pasar de página
   (cargaba la hoja de animaciones entera de cada Pokémon, hasta 9 en un fotograma).
   Ahora usa una hoja de miniaturas por generación: pasar de página no carga nada.
